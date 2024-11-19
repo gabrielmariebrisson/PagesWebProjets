@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projet NLP : Surajustement et Classification de Sentiment</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="./templates/assets/css/styles.css">
+</head>
+<body>
+    <!-- Ajout du bouton retour -->
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-12 p-3">
+                <a href="https://gabriel.mariebrisson.fr" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left"></i> Retour
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <header class="text-center mb-5">
+            <h1>Projet éducatif NLP : Surajustement et Classification de Sentiment</h1>
+            <p>Utilisation des réseaux de neurones avec Keras pour éviter le surajustement sur des données de sentiment.</p>
+        </header>
+
+        <!-- Introduction -->
+        <section class="section mb-5">
+            <h2>Présentation</h2>
+            <p>
+                Ce projet vise à classifier les tweets en fonction des sentiments exprimés par les utilisateurs. Les réseaux sociaux jouent un rôle prépondérant dans la communication moderne, permettant à chacun d'exprimer librement son opinion. Les applications de cette technologie sont multiples :
+            </p>
+            <ul class="list-unstyled">
+                <li><strong>Marketing :</strong> Analyser la perception d'une marque sur les réseaux sociaux pour ajuster les stratégies de communication.</li>
+                <li><strong>Service client :</strong> Surveiller en temps réel les commentaires des clients, facilitant ainsi l'identification rapide des problèmes récurrents.</li>
+                <li><strong>Prévisions de tendance :</strong> Aider les entreprises à anticiper les besoins des consommateurs en adaptant leurs offres aux goûts changeants du public.</li>
+                <li><strong>Ressources humaines :</strong> Évaluer le moral des employés et identifier les sources de frustration au sein des grandes entreprises.</li>
+                <li><strong>Finance :</strong> Prédire l'évolution des cours boursiers en étudiant les émotions et les opinions du public sur les marchés.</li>
+            </ul>
+            <p>
+                Pour réaliser cela, nous avons utilisé le jeu de données <a href="http://help.sentiment140.com/home" target="_blank">Sentiment140</a>, qui contient 1,6 million de tweets étiquetés par sentiment (0 pour négatif, 4 pour positif). Contrairement à un déploiement industriel, cette approche ne nécessitera pas la mise en place complète de l'ingénierie des données, comprenant l'extraction, le nettoyage et la gestion des données manquantes. Le code a été développé lors de la certification TensorFlow, Cours 3, semaine 3, et vous pouvez le retrouver ici : <a href="https://github.com/gabrielmariebrisson/C3W3_Assignement.ipynb" target="_blank">GitHub</a>.
+            </p>
+        </section>
+
+        <!-- Architecture du Modèle -->
+        <section class="section mb-5">
+            <h2>Architecture du Modèle</h2>
+            <p>
+                Pour classifier un texte, il est essentiel de le transformer en un format compréhensible par la machine. Nous avons opté pour la méthode d'embedding pré-entraînée GloVe de Stanford. Cette technique tient compte de la fréquence à laquelle des paires de mots apparaissent ensemble dans l'ensemble des textes, permettant ainsi de capturer des relations sémantiques subtiles entre les mots. Par exemple, une opération vectorielle possible est : <em>roi - homme + femme ≈ reine</em>. Une approche plus moderne consisterait à utiliser une architecture de type transformateur.
+            </p>
+            <p>
+                Le modèle de classification des sentiments se compose de plusieurs couches :
+            </p>
+            <ul class="list-unstyled">
+                <li><strong>Couche d'embedding :</strong> Cette couche intègre la matrice d'embedding GloVe, permettant d'ajuster les poids pour gérer les mots non présents dans le vocabulaire de GloVe et de réduire la taille de la matrice.</li>
+                <li><strong>Couche Conv1D :</strong> Elle capture les relations temporelles au sein des séquences textuelles. Bien que j'aurais pu utiliser des couches bidirectionnelles ou LSTM, qui sont plus adaptées, cela aurait prolongé le temps d'entraînement.</li>
+                <li><strong>Couche Dense :</strong> Cette couche fournit la sortie finale en agrégeant les informations contextuelles extraites des couches précédentes.</li>
+            </ul>
+            <p>
+                Les hyperparamètres, tels que le nombre de neurones et le taux d'apprentissage, jouent un rôle crucial dans les performances du modèle. Parmi ces hyperparamètres figurent : le nombre de neurones, le taux d'apprentissage, la longueur maximale des séquences et la dimension de l'embedding.
+            </p>
+                <img src="{{ url_for('static', filename='images/Architecture.png') }}" alt="Structure du modèle de classification des sentiments" class="img-fluid mb-4">
+            </section>
+
+        <section class="section mb-5">
+            <h2>Résultats</h2>
+            <p>
+                Les techniques les plus efficaces pour limiter le surajustement incluent la régularisation par dropout et la réduction de la complexité du modèle. Ces approches ont permis d'obtenir des résultats significatifs, comme en témoignent les courbes ci-dessous.
+            </p>
+            <p>
+                En observant les courbes d'apprentissage, nous notons une convergence stable avec une précision atteignant 75 % sur les données de test (répartition 90/10) et 79 % sur les données d'apprentissage. Cela démontre une bonne capacité du modèle à généraliser sans trop s'adapter aux spécificités des données d'entraînement.
+            </p>
+            <div class="row mb-4">
+                <div class="col-md-6 mb-3">
+                    <img src="{{ url_for('static', filename='images/accurancy.png') }}" alt="Courbes d'apprentissage montrant la précision" class="img-fluid mb-4">
+                </div>
+                <div class="col-md-6 mb-3">
+                    <img src="{{ url_for('static', filename='images/loss.png') }}" alt="Courbes d'apprentissage montrant la perte" class="img-fluid mb-4">
+                </div>
+            </div>
+            <p>
+                En plus de la régularisation, des techniques telles que l'augmentation des données et l'ajustement des hyperparamètres ont été envisagées pour améliorer davantage les performances du modèle. Cela permettrait non seulement d'optimiser la précision, mais également d'accroître la robustesse face à des données variées.
+            </p>
+        </section>
+
+        <section class="section mb-5">
+            <h2>Coût de Développement et de Maintenance</h2>
+            <p>
+                Pour entraîner ce modèle, nous avons utilisé Google Colab, où l'entraînement a duré 13 minutes. Voici les spécifications matérielles utilisées :
+            </p>
+            <ul class="list-unstyled">
+                <li>Processeur : Intel Xeon (simple cœur) cadencé à 2,2 GHz.</li>
+                <li>RAM : 12,67 GiB.</li>
+            </ul>
+            <p>
+                Les performances obtenues montrent une précision de 75 % sur les données de test (répartition 90/10) et de 79 % sur les données d'apprentissage. L'objectif principal étant d'éviter le surapprentissage. De plus, le poids du modèle chargé est de 52 Mo, et le temps d'exécution pour effectuer un test est de seulement 0,21 seconde.
+            </p>
+            <p>
+                <strong>Analyse des coûts :</strong>
+            </p>
+            <ul class="list-unstyled">
+                <li>Le coût d'entraînement est raisonnable grâce à l'utilisation de Google Colab, qui offre des ressources GPU gratuites pour des projets de petite à moyenne envergure.</li>
+                <li>Les coûts de maintenance se limiteront principalement aux mises à jour des données et à l'optimisation des hyperparamètres.</li>
+                <li>Le temps de développement a duré 2 heures.</li>
+            </ul>
+            <p>
+                <strong>Perspectives d'amélioration :</strong>
+            </p>
+            <ul class="list-unstyled">
+                <li>Tester des architectures de modèles plus complexes, comme les réseaux de neurones récurrents (RNN) ou les Transformers, pour potentiellement améliorer la performance.</li>
+                <li>Utiliser des techniques d'augmentation de données pour enrichir l'ensemble d'apprentissage et améliorer la généralisation.</li>
+                <li>Implémenter une validation croisée pour mieux évaluer la robustesse du modèle sur des ensembles de données variés.</li>
+            </ul>
+        </section>
+
+        <section class="section">
+            <h2>Entrez votre texte pour analyse :</h2>
+            <form action="/" method="POST" class="card p-4 mb-4">
+                <div class="mb-3">
+                    <label for="text" class="form-label">Entrez votre texte en anglais pour tester le programme :</label>
+                    <textarea class="form-control" id="text" name="text" rows="4" placeholder="Tapez votre texte ici..." required></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Analyser</button>
+            </form>
+
+            {% if prediction %}
+                {% if prediction['prediction'] == '0' %} 
+                    <div class="alert alert-danger" role="alert">
+                        La phrase est négative
+                    </div>
+                {% else %}
+                    <div class="alert alert-success" role="alert">
+                        La phrase est positive
+                    </div>
+                {% endif %}
+            {% endif %}
+        </section>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

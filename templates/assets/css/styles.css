@@ -1,0 +1,176 @@
+/* Styles généraux */
+body {
+    font-family: 'Helvetica Neue', Arial, sans-serif; /* Utiliser une police moderne */
+    margin: 0;
+    padding: 0;
+    background: linear-gradient(to right, #f0f4f8, #d9e2ec); /* Dégradé de fond doux */
+    color: #333; /* Couleur de texte principale */
+}
+
+header {
+    background-color: #4a4e69; /* Couleur de fond de l'en-tête */
+    color: #f8f9fa; /* Couleur de texte claire pour l'en-tête */
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1); /* Ombre pour ajouter de la profondeur */
+}
+header h1 {
+   
+    color: #f8f9fa;
+}
+
+.container {
+    max-width: 1200px;
+    margin: auto; /* Centrer la conteneur */
+    padding: 40px 20px;
+}
+
+.section {
+    padding: 20px;
+    background-color: rgba(255, 255, 255, 0.95); /* Fond blanc presque opaque */
+    border-radius: 8px; /* Coins arrondis */
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1); /* Ombre plus marquée */
+    transition: transform 0.3s; /* Transition douce pour l'effet au survol */
+}
+
+.section:hover {
+    transform: translateY(-5px); /* Légère élévation au survol */
+}
+
+/* Titres */
+h1, h2, h3 {
+    font-weight: 700;
+    margin-bottom: 20px; /* Espacement sous les titres */
+    color: #4a4e69; /* Couleur de titre moderne */
+    text-transform: uppercase; /* Mettre les titres en majuscules */
+}
+
+/* Formulaire */
+form {
+    margin-top: 20px;
+    text-align: center;
+    background-color: rgba(255, 255, 255, 0.8); /* Fond blanc semi-transparent */
+    border-radius: 8px; /* Coins arrondis */
+    padding: 20px; /* Espacement interne */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); /* Ombre douce */
+}
+
+label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: bold; /* Mettre le texte en gras */
+    color: #333; /* Couleur de texte du label */
+}
+
+textarea {
+    width: 80%;
+    max-width: 600px;
+    padding: 10px;
+    font-size: 16px;
+    border-radius: 4px; /* Coins arrondis */
+    border: 1px solid #ccc; /* Bordure grise */
+    transition: border-color 0.3s, box-shadow 0.3s; /* Transition douce */
+}
+
+textarea:focus {
+    border-color: #4a4e69; /* Changer la bordure au focus */
+    outline: none; /* Enlever le contour par défaut */
+    box-shadow: 0 0 5px rgba(74, 78, 105, 0.5); /* Ombre au focus */
+}
+
+input[type="submit"] {
+    background-color: #4a4e69; /* Couleur de fond du bouton */
+    border: none;
+    color: #f8f9fa; /* Couleur de texte claire pour le bouton */
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin-top: 10px;
+    cursor: pointer;
+    border-radius: 4px; /* Coins arrondis pour les boutons */
+    transition: background-color 0.3s, transform 0.2s; /* Ajout de transitions */
+}
+
+input[type="submit"]:hover {
+    background-color: #2a2e38; /* Couleur de fond au survol */
+    transform: translateY(-2px); /* Effet de déplacement */
+}
+
+/* Images */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 20px auto; /* Espacement autour des images */
+    border-radius: 8px; /* Coins arrondis pour les images */
+}
+
+/* Cartes */
+.card {
+    background-color: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px; /* Espacement entre les cartes */
+    transition: transform 0.3s; /* Transition douce pour les cartes */
+}
+
+.card:hover {
+    transform: translateY(-5px); /* Légère élévation au survol des cartes */
+}
+
+.card-header {
+    background-color: rgba(255, 255, 255, 0.2);
+    border-bottom: none;
+    padding: 10px; /* Espacement interne */
+}
+
+.img-fluid {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px; /* Coins arrondis pour les images fluides */
+}
+
+.form-control, .btn {
+    background-color: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: #fff;
+    padding: 10px; /* Ajout de padding pour les champs de saisie */
+    border-radius: 4px; /* Coins arrondis pour les champs de saisie */
+}
+
+.form-control::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+/* Ajout de styles pour les listes */
+ul {
+    list-style-type: none; /* Enlever les puces */
+    padding: 0; /* Enlever le padding par défaut */
+}
+
+li {
+    margin-bottom: 10px; /* Espacement entre les éléments de la liste */
+}
+
+.btn-custom {
+    background-color: #007bff; /* Couleur de fond */
+    border: none; /* Pas de bordure */
+    color: white; /* Couleur du texte */
+    padding: 10px 20px; /* Espacement interne */
+    border-radius: 5px; /* Coins arrondis */
+    font-size: 16px; /* Taille de la police */
+    transition: background-color 0.3s, transform 0.3s; /* Effets de transition */
+}
+
+.btn-custom:hover {
+    background-color: #0056b3; /* Couleur de fond au survol */
+    transform: scale(1.05); /* Légère augmentation de la taille au survol */
+}
+
+.btn-custom:focus {
+    outline: none; /* Supprimer le contour de focus */
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.5); /* Ombre de focus */
+}
