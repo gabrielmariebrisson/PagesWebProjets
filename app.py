@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, redirect
 import numpy as np
 import tensorflow as tf
 import pickle
@@ -36,6 +36,7 @@ def index():
 
     return render_template('AnalyseSentiment.html', prediction=prediction)
 
+@app.route('/')
 def redirect_to_other_site():
     return redirect("https://gabriel.mariebrisson.fr", code=301)
 
