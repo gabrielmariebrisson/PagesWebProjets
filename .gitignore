@@ -1,5 +1,7 @@
 # Ignorer tous les fichiers .DS_Store
 .DS_Store
+**/.DS_Store
+
 
 # Ignorer les fichiers de logs
 *.log
