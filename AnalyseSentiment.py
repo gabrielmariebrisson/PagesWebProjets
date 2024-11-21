@@ -4,11 +4,62 @@ import pickle
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
 # Définir la configuration de la page en premier
+# Au début de votre script
 st.set_page_config(
     page_title="Analyse de Sentiments",
+    page_icon="😊",  # Ajoutez une icône
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Personnaliser le style avec du CSS personnalisé
+st.markdown("""
+<style>
+    /* Fond général */
+    .reportview-container {
+        background-color: #F4F6F9;
+        font-family: 'Inter', 'Segoe UI', Roboto, sans-serif;
+    }
+
+    /* Titres */
+    h1, h2, h3 {
+        color: #2C3E50;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        background: linear-gradient(45deg, #3498db, #2ecc71);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    /* Amélioration des en-têtes */
+    .css-1h7aky3 {
+        background-color: rgba(44, 62, 80, 0.05);
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+
+    /* Boutons */
+    .stButton>button {
+        color: white;
+        background-color: #3498db;
+        border: none;
+        border-radius: 25px;
+        padding: 10px 20px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    .stButton>button:hover {
+        background-color: #2980b9;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 8px rgba(0,0,0,0.15);
+    }
+
+    
+</style>
+""", unsafe_allow_html=True)
 
 # Charger le modèle
 @st.cache_resource
@@ -35,15 +86,36 @@ st.markdown(
     """
     <a href="https://gabriel.mariebrisson.fr" target="_blank" style="text-decoration:none;">
     <div style="
-    display:inline-block;
-    background-color: grey;
-    color:white;
-    padding:10px 20px;
-    border-radius:5px;
-    text-align:center;
-    font-size:16px;
-    cursor:pointer;">
+    display: inline-block;
+    background: linear-gradient(135deg, #6A11CB 0%, #2575FC 100%);
+    color: white;
+    padding: 12px 25px;
+    border-radius: 30px;
+    text-align: center;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(37, 117, 252, 0.3);
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border: 2px solid transparent;
+    position: relative;
+    overflow: hidden;
+    ">
     Retour
+    <span style="
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(255,255,255,0.2);
+    transform: scaleX(0);
+    transform-origin: right;
+    transition: transform 0.3s ease;
+    z-index: 1;
+    "></span>
     </div>
     </a>
     """,
@@ -144,19 +216,48 @@ st.markdown(
 )
 
 # Analyse de texte
-st.header("Analyse de Sentiment en Temps Réel")
-user_input = st.text_area("Entrez un texte en anglais pour tester le modèle :", 
-                           placeholder="Tapez votre texte ici...")
+# Modification de la section d'analyse
+st.header("🔍 Analyse de Sentiment en Temps Réel")
 
-if st.button("Analyser"):
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    user_input = st.text_area(
+        "Entrez un texte en anglais pour tester le modèle :",
+        placeholder="Tapez votre texte ici...",
+        height=150
+    )
+
+with col2:
+    st.write("") # Espace pour aligner
+    st.write("") # Espace pour aligner
+    analyze_button = st.button("🧠 Analyser", type="primary")
+
+if analyze_button:
     if user_input:
-        # Prétraitement et prédiction
+        # Votre code de prédiction existant
         processed_input = seq_pad_and_trunc(user_input, tokenizer)
         prediction = model.predict(processed_input)
         
-        # Affichage du résultat
         sentiment = "positif" if prediction[0][0] > 0.5 else "négatif"
-        st.success(f"La phrase est **{sentiment}** avec une probabilité de {prediction[0][0]:.2f}")
+        
+        # Affichage amélioré
+        col_result1, col_result2 = st.columns(2)
+        
+        with col_result1:
+            st.metric(
+                label="Sentiment", 
+                value=sentiment.capitalize(), 
+                delta=f"{prediction[0][0]:.2f} de probabilité"
+            )
+
+        st.balloons()
+        
+        with col_result2:
+            if sentiment == "positif":
+                st.success("🌞 Sentiment Positif Détecté!")
+            else:
+                st.warning("🌧️ Sentiment Négatif Détecté.")
     else:
         st.error("Veuillez entrer un texte avant de lancer l'analyse.")
 
