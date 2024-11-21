@@ -1,2 +1,2 @@
-numpy>=1.0.0,<2.25.0
-tensorflow>=2.0.0,<2.13.0
+numpy 
+tensorflow 
