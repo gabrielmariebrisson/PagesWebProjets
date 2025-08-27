@@ -131,6 +131,57 @@ st.markdown(
     """
 )
 
+
+
+# Analyse de texte
+# Modification de la section d'analyse
+st.header("🔍 Analyse de Sentiment en Temps Réel")
+
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    user_input = st.text_area(
+        "Entrez un texte en anglais pour tester le modèle :",
+        placeholder="Tapez votre texte ici...",
+        height=150
+    )
+
+with col2:
+    st.write("") # Espace pour aligner
+    st.write("") # Espace pour aligner
+    analyze_button = st.button("🧠 Analyser", type="primary")
+
+if analyze_button:
+    if user_input:
+        # Votre code de prédiction existant
+        processed_input = seq_pad_and_trunc(user_input, tokenizer)
+        prediction = model.predict(processed_input)
+        
+        sentiment = "positif" if prediction[0][0] > 0.5 else "négatif"
+        
+        # Affichage amélioré
+        col_result1, col_result2 = st.columns(2)
+        
+        with col_result1:
+            st.metric(
+                label="Sentiment", 
+                value=sentiment.capitalize(), 
+                delta=f"{prediction[0][0]:.2f} de probabilité 0 pour negatif 1 pour positif"
+            )
+
+        st.balloons()
+        
+        with col_result2:
+            if sentiment == "positif":
+                st.success("🌞 Sentiment Positif Détecté!")
+            else:
+                st.warning("🌧️ Sentiment Négatif Détecté.")
+    else:
+        st.error("Veuillez entrer un texte avant de lancer l'analyse.")
+
+
+
+
 # Section Présentation
 st.header("Présentation")
 st.markdown(
@@ -215,51 +266,6 @@ st.markdown(
     """
 )
 
-# Analyse de texte
-# Modification de la section d'analyse
-st.header("🔍 Analyse de Sentiment en Temps Réel")
-
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    user_input = st.text_area(
-        "Entrez un texte en anglais pour tester le modèle :",
-        placeholder="Tapez votre texte ici...",
-        height=150
-    )
-
-with col2:
-    st.write("") # Espace pour aligner
-    st.write("") # Espace pour aligner
-    analyze_button = st.button("🧠 Analyser", type="primary")
-
-if analyze_button:
-    if user_input:
-        # Votre code de prédiction existant
-        processed_input = seq_pad_and_trunc(user_input, tokenizer)
-        prediction = model.predict(processed_input)
-        
-        sentiment = "positif" if prediction[0][0] > 0.5 else "négatif"
-        
-        # Affichage amélioré
-        col_result1, col_result2 = st.columns(2)
-        
-        with col_result1:
-            st.metric(
-                label="Sentiment", 
-                value=sentiment.capitalize(), 
-                delta=f"{prediction[0][0]:.2f} de probabilité"
-            )
-
-        st.balloons()
-        
-        with col_result2:
-            if sentiment == "positif":
-                st.success("🌞 Sentiment Positif Détecté!")
-            else:
-                st.warning("🌧️ Sentiment Négatif Détecté.")
-    else:
-        st.error("Veuillez entrer un texte avant de lancer l'analyse.")
 
 # Footer
 st.markdown(
