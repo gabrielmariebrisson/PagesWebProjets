@@ -6,6 +6,24 @@ import tensorflow as tf
 import pickle
 import requests # Pour les requêtes API
 from collections import defaultdict
+import logging
+
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+
+logger = logging.getLogger('CineReco')
+
+# Vérification des fichiers
+logger.info("=" * 60)
+logger.info("🎬 DÉMARRAGE DE CINÉ-RECO")
+logger.info("=" * 60)
+
+
 
 
 # --- Fonctions de l'API TMDb ---
@@ -50,7 +68,24 @@ def get_movie_data(title):
 @st.cache_resource
 def load_model():
     try:
-        return tf.keras.models.load_model('./templates/assets/film/best_model.keras', safe_mode=False)
+        def l2_norm(x):
+            return tf.linalg.l2_normalize(x, axis=1)
+
+        def diff_abs(x):
+            return tf.abs(x[0] - x[1])
+
+        def prod_mul(x):
+            return x[0] * x[1]
+
+        return tf.keras.models.load_model(
+            "./templates/assets/film/best_model.keras",
+            custom_objects={
+                'l2_norm': l2_norm,
+                'diff_abs': diff_abs,
+                'prod_mul': prod_mul
+            },
+            safe_mode=False
+        )
     
     except Exception as e:
         st.error(f"Erreur lors du chargement du modèle : {e}")
@@ -113,12 +148,18 @@ def generate_recommendations(model, user_ratings, scalers, data):
     return reco_df.sort_values(by='Note Prédite', ascending=False)
 
 # --- Interface Streamlit ---
+logger.info(" --- Interface Streamlit ---")
 st.set_page_config(layout="wide", page_title="Ciné-Reco")
 st.title("🎬 Ciné-Reco : Votre Guide Cinéma Personnalisé")
 
+logger.info("--- Chargement des données ---")
+logger.info("- Modèle")
 # Chargement
 model = load_model()
+logger.info("- Scalers")
 scalerUser, scalerItem, scalerTarget, movie_dict, item_vecs_finder, unique_genres = load_objects()
+logger.info("--- Données chargées avec succès ---")
+
 
 if model and movie_dict:
     # --- Barre latérale pour la notation ---
