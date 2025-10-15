@@ -76,7 +76,7 @@ def get_movie_data(title):
         except:
             pass
 
-url = f"http://www.omdbapi.com/?t={clean_title}&apikey={API_KEY_FILM}"
+    url = f"http://www.omdbapi.com/?t={clean_title}&apikey={API_KEY_FILM}"
     if year:
         url += f"&y={year}"
 
