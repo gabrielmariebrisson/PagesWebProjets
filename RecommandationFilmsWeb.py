@@ -7,7 +7,12 @@ import requests
 from collections import defaultdict
 from deep_translator import GoogleTranslator
 import os
+from dotenv import load_dotenv
 
+
+
+load_dotenv()
+API_KEY_FILM = os.getenv('API_KEY_FILM')
 # --- Configuration de la traduction automatique ---
 LANGUAGES = {
     "fr": "🇫🇷 Français",
@@ -71,7 +76,7 @@ def get_movie_data(title):
         except:
             pass
 
-    url = f"http://www.omdbapi.com/?t={clean_title}&apikey=667fd579"
+url = f"http://www.omdbapi.com/?t={clean_title}&apikey={API_KEY_FILM}"
     if year:
         url += f"&y={year}"
 

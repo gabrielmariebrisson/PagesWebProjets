@@ -6,7 +6,6 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 
 from deep_translator import GoogleTranslator
 
-
 # --- Configuration de la traduction automatique ---
 LANGUAGES = {
     "fr": "🇫🇷 Français",

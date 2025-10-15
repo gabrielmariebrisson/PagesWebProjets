@@ -21,6 +21,12 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from deep_translator import GoogleTranslator
+from dotenv import load_dotenv
+
+
+
+load_dotenv()
+OPENWEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY')
 
 
 # Page configuration
@@ -73,8 +79,6 @@ CITIES = {
     'silicon_valley': City('Silicon Valley', 37.3875, -122.0575, 'America/Los_Angeles', '🌉')
 }
 
-# API Configuration
-OPENWEATHER_API_KEY = "9831a5fb2b1386a9a8c3eeac4f8200fa"
 
 # Model Configuration
 WINDOW_SIZE = 30
