@@ -20,7 +20,7 @@ import plotly.graph_objects as go
 import requests
 import json
 from datetime import datetime
-import subprocess  # ⬅️ AJOUT IMPORT MANQUANT
+import subprocess
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -211,8 +211,24 @@ def convertSongToMatrice(audio_path, size=599):
         return None
     
 def get_tracks_with_previews(tracks):
-    """Filtre les tracks qui ont des previews disponibles"""
-    tracks_with_previews = [track for track in tracks if track.get('preview_url')]
+    """Filtre les tracks qui ont des previews disponibles - VERSION AMÉLIORÉE"""
+    if not tracks:
+        return []
+    
+    tracks_with_previews = []
+    for track in tracks:
+        if track.get('preview_url'):
+            # S'assurer que la structure est cohérente
+            track_data = {
+                'id': track.get('id'),
+                'name': track.get('name', 'Titre inconnu'),
+                'artists': track.get('artists', []),
+                'preview_url': track.get('preview_url'),
+                'uri': track.get('uri'),
+                'external_urls': track.get('external_urls', {})
+            }
+            tracks_with_previews.append(track_data)
+    
     st.info(f"🎵 {len(tracks_with_previews)}/{len(tracks)} titres avec extraits audio")
     return tracks_with_previews
 
@@ -349,9 +365,6 @@ def download_spotify_preview(preview_url, output_path):
 
 # --- FONCTIONS SPOTIFY AMÉLIORÉES ---
 
-def get_tracks_with_previews(tracks):
-    """Filtre les tracks qui ont des previews disponibles"""
-    return [track for track in tracks if track.get('preview_url')]
 
 # Mapping des genres
 label_mapping = {
@@ -681,8 +694,12 @@ def export_playlist_to_spotify(spotify_client, playlist_tracks, playlist_name, p
         return None
 
 def get_user_saved_tracks(spotify_client, limit=50):
-    """Récupère les titres sauvegardés de l'utilisateur"""
+    """Récupère les titres sauvegardés de l'utilisateur - VERSION CORRIGÉE"""
     try:
+        if not spotify_client:
+            st.error("❌ Client Spotify non disponible")
+            return []
+            
         results = spotify_client.current_user_saved_tracks(limit=limit)
         tracks = []
         
@@ -691,15 +708,17 @@ def get_user_saved_tracks(spotify_client, limit=50):
             tracks.append({
                 'id': track['id'],
                 'name': track['name'],
-                'artists': ', '.join([artist['name'] for artist in track['artists']]),
+                'artists': track['artists'],  # Garder la liste d'artistes
                 'preview_url': track.get('preview_url'),
                 'uri': track['uri'],
-                'external_url': track['external_urls']['spotify']
+                'external_urls': track['external_urls']
             })
         
+        st.success(f"✅ {len(tracks)} titres récupérés")
         return tracks
+        
     except Exception as e:
-        st.error(f"Erreur lors de la récupération des titres sauvegardés: {e}")
+        st.error(f"❌ Erreur récupération titres sauvegardés: {str(e)}")
         return []
 
 # --- INITIALISATION SESSION STATE ---
@@ -713,6 +732,8 @@ if 'spotify_recent_tracks' not in st.session_state:
     st.session_state.spotify_recent_tracks = []
 if 'spotify_saved_tracks' not in st.session_state:
     st.session_state.spotify_saved_tracks = []
+if 'spotify_client' not in st.session_state:
+    st.session_state.spotify_client = None
 
 # --- INTERFACE STREAMLIT PRINCIPALE ---
 st.title("🎵 Music Playlist Generator")
@@ -766,7 +787,8 @@ with st.sidebar:
         )
         
         # Obtenir le client Spotify
-        spotify_client = get_spotify_client()
+        st.session_state.spotify_client = get_spotify_client()
+        spotify_client = st.session_state.spotify_client 
         
         if spotify_client:
             try:
@@ -834,55 +856,67 @@ tab2, tab3, tab4 = st.tabs(["🎧 Spotify", "📊 Analyse", "🎨 Playlist"])
 with tab2:
     st.header("🎧 Importer depuis Spotify")
     
-    if spotify_client:
+    if st.session_state.get('spotify_client'):
+        spotify_client = st.session_state.spotify_client
+        
         # Nouvelle section : Mes titres sauvegardés
         st.subheader("💾 Mes titres sauvegardés")
         
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            limit_tracks = st.slider("Nombre de titres à importer:", 10, 100, 20)
+            limit_tracks = st.slider("Nombre de titres à importer:", 10, 100, 20, key="saved_limit")
         
         with col2:
             if st.button("🔄 Charger mes titres", key="load_saved"):
                 with st.spinner("Récupération de vos titres..."):
-                    saved_tracks = get_user_saved_tracks(spotify_client, limit=limit_tracks)
-                    tracks_with_previews = get_tracks_with_previews(saved_tracks)
-                    st.session_state.spotify_saved_tracks = tracks_with_previews
-                    
-                    if tracks_with_previews:
-                        st.success(f"✅ {len(tracks_with_previews)} titres avec extraits chargés (sur {len(saved_tracks)} total)")
-                    else:
-                        st.warning("⚠️ Aucun titre avec extrait audio disponible")
+                    try:
+                        saved_tracks = get_user_saved_tracks(spotify_client, limit=limit_tracks)
+                        if saved_tracks:
+                            tracks_with_previews = get_tracks_with_previews(saved_tracks)
+                            st.session_state.spotify_saved_tracks = tracks_with_previews
+                            
+                            if tracks_with_previews:
+                                st.success(f"✅ {len(tracks_with_previews)} titres avec extraits chargés")
+                            else:
+                                st.warning("⚠️ Aucun titre avec extrait audio disponible")
+                        else:
+                            st.error("❌ Aucun titre récupéré")
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {str(e)}")
         
         with col3:
             if st.button("🔍 Tout analyser", key="analyze_all_saved"):
-                if 'spotify_saved_tracks' in st.session_state and st.session_state.spotify_saved_tracks:
-                    for i, track in enumerate(st.session_state.spotify_saved_tracks[:5]):  # Limiter à 5 pour éviter les timeouts
-                        analyze_spotify_track(track, i, "saved")
+                if st.session_state.get('spotify_saved_tracks'):
+                    analyzed_count = 0
+                    for i, track in enumerate(st.session_state.spotify_saved_tracks[:5]):  # Limiter à 5
+                        result = analyze_spotify_track(track, i, "saved")
+                        if result:
+                            analyzed_count += 1
+                    st.success(f"✅ {analyzed_count} titres analysés")
                 else:
                     st.warning("⚠️ Chargez d'abord vos titres")
         
-        # Afficher et analyser les titres sauvegardés
-        if 'spotify_saved_tracks' in st.session_state and st.session_state.spotify_saved_tracks:
+        # Afficher les titres sauvegardés
+        if st.session_state.get('spotify_saved_tracks'):
             st.subheader(f"Vos titres avec extraits ({len(st.session_state.spotify_saved_tracks)})")
             
-            # Statistiques des previews
-            total_tracks = len(st.session_state.spotify_saved_tracks)
-            st.info(f"🎵 {total_tracks} titres avec extraits audio disponibles")
-            
-            for i, track in enumerate(st.session_state.spotify_saved_tracks[:8]):  # Limiter l'affichage
+            for i, track in enumerate(st.session_state.spotify_saved_tracks[:8]):
                 col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                 
                 with col1:
                     st.markdown(f"**{track['name']}**")
-                    artists = track.get('artists', 'Artiste inconnu')
-                    if isinstance(artists, list):
-                        artists = ', '.join([a['name'] for a in artists])
-                    st.caption(f"🎤 {artists}")
-                    
-                    # Indicateur de preview disponible
-                    if track.get('preview_url'):
-                        st.caption("🔊 Extrait 30s disponible")
+                    artists = track.get('artists', [])
+                    if isinstance(artists, list) and len(artists) > 0:
+                        artist_names = []
+                        for artist in artists:
+                            if isinstance(artist, dict):
+                                artist_names.append(artist.get('name', 'Artiste inconnu'))
+                            else:
+                                artist_names.append(str(artist))
+                        artists_display = ', '.join(artist_names)
+                    else:
+                        artists_display = "Artiste inconnu"
+                    st.caption(f"🎤 {artists_display}")
                 
                 with col2:
                     if track.get('preview_url'):
@@ -898,7 +932,7 @@ with tab2:
                     if st.button("➕ Ajouter", key=f"add_saved_{i}"):
                         track_data = {
                             'name': track['name'],
-                            'artists': track.get('artists', 'Artiste inconnu'),
+                            'artists': artists_display,
                             'source': 'spotify',
                             'spotify_id': track.get('id'),
                             'uri': track.get('uri'),
@@ -906,15 +940,17 @@ with tab2:
                             'genre': 'Non analysé',
                             'confidence': 0.0
                         }
+                        if 'analyzed_tracks' not in st.session_state:
+                            st.session_state.analyzed_tracks = []
                         st.session_state.analyzed_tracks.append(track_data)
                         st.success(f"✅ {track['name'][:40]} ajouté!")
         
-        # Sections Top Tracks et Récents - VERSION AMÉLIORÉE
+        # Sections Top Tracks et Récents
         st.markdown("---")
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("📊 Top tracks avec extraits", key="load_top"):
+            if st.button("📊 Top tracks", key="load_top"):
                 try:
                     top_tracks = spotify_client.current_user_top_tracks(limit=25, time_range='medium_term')
                     tracks_with_previews = get_tracks_with_previews(top_tracks['items'])
@@ -925,10 +961,10 @@ with tab2:
                     else:
                         st.warning("⚠️ Aucun top track avec extrait audio disponible")
                 except Exception as e:
-                    st.error(f"Erreur: {str(e)}")
+                    st.error(f"❌ Erreur: {str(e)}")
         
         with col2:
-            if st.button("🕒 Récents avec extraits", key="load_recent"):
+            if st.button("🕒 Titres récents", key="load_recent"):
                 try:
                     recent = spotify_client.current_user_recently_played(limit=25)
                     recent_tracks = [item['track'] for item in recent['items']]
@@ -940,21 +976,29 @@ with tab2:
                     else:
                         st.warning("⚠️ Aucun titre récent avec extrait audio disponible")
                 except Exception as e:
-                    st.error(f"Erreur: {str(e)}")
+                    st.error(f"❌ Erreur: {str(e)}")
         
         # Afficher les Top Tracks
-        if 'spotify_top_tracks' in st.session_state and st.session_state.spotify_top_tracks:
-            st.subheader("🎯 Vos top tracks avec extraits")
+        if st.session_state.get('spotify_top_tracks'):
+            st.subheader("🎯 Vos top tracks")
             
             for i, track in enumerate(st.session_state.spotify_top_tracks[:6]):
                 col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                 
                 with col1:
                     st.markdown(f"**{track['name']}**")
-                    artists = ", ".join([a['name'] for a in track['artists']])
-                    st.caption(f"🎤 {artists}")
-                    if track.get('preview_url'):
-                        st.caption("🔊 Extrait disponible")
+                    artists = track.get('artists', [])
+                    if isinstance(artists, list) and len(artists) > 0:
+                        artist_names = []
+                        for artist in artists:
+                            if isinstance(artist, dict):
+                                artist_names.append(artist.get('name', 'Artiste inconnu'))
+                            else:
+                                artist_names.append(str(artist))
+                        artists_display = ', '.join(artist_names)
+                    else:
+                        artists_display = "Artiste inconnu"
+                    st.caption(f"🎤 {artists_display}")
                 
                 with col2:
                     if track.get('preview_url'):
@@ -968,29 +1012,39 @@ with tab2:
                     if st.button("➕", key=f"add_top_{i}"):
                         track_data = {
                             'name': track['name'],
-                            'artists': ", ".join([a['name'] for a in track['artists']]),
+                            'artists': artists_display,
                             'source': 'spotify', 
                             'spotify_id': track['id'],
                             'uri': track['uri'],
                             'genre': 'Non analysé',
                             'confidence': 0.0
                         }
+                        if 'analyzed_tracks' not in st.session_state:
+                            st.session_state.analyzed_tracks = []
                         st.session_state.analyzed_tracks.append(track_data)
                         st.success("✅ Ajouté!")
         
         # Afficher les Récents
-        if 'spotify_recent_tracks' in st.session_state and st.session_state.spotify_recent_tracks:
-            st.subheader("🕒 Vos titres récents avec extraits")
+        if st.session_state.get('spotify_recent_tracks'):
+            st.subheader("🕒 Vos titres récents")
             
             for i, track in enumerate(st.session_state.spotify_recent_tracks[:6]):
                 col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                 
                 with col1:
                     st.markdown(f"**{track['name']}**")
-                    artists = ", ".join([a['name'] for a in track['artists']])
-                    st.caption(f"🎤 {artists}")
-                    if track.get('preview_url'):
-                        st.caption("🔊 Extrait disponible")
+                    artists = track.get('artists', [])
+                    if isinstance(artists, list) and len(artists) > 0:
+                        artist_names = []
+                        for artist in artists:
+                            if isinstance(artist, dict):
+                                artist_names.append(artist.get('name', 'Artiste inconnu'))
+                            else:
+                                artist_names.append(str(artist))
+                        artists_display = ', '.join(artist_names)
+                    else:
+                        artists_display = "Artiste inconnu"
+                    st.caption(f"🎤 {artists_display}")
                 
                 with col2:
                     if track.get('preview_url'):
@@ -1004,13 +1058,15 @@ with tab2:
                     if st.button("➕", key=f"add_recent_{i}"):
                         track_data = {
                             'name': track['name'],
-                            'artists': ", ".join([a['name'] for a in track['artists']]),
+                            'artists': artists_display,
                             'source': 'spotify', 
                             'spotify_id': track['id'],
                             'uri': track['uri'],
                             'genre': 'Non analysé',
                             'confidence': 0.0
                         }
+                        if 'analyzed_tracks' not in st.session_state:
+                            st.session_state.analyzed_tracks = []
                         st.session_state.analyzed_tracks.append(track_data)
                         st.success("✅ Ajouté!")
                         
