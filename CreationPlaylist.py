@@ -466,6 +466,15 @@ def perform_pca(features_list):
     features_scaled = scaler.fit_transform(features_array)
     
     pca = PCA(n_components=2)
+    pca_result = pca.fit_transform(features_scaled)
+    
+    return pca_result, pca, scaler
+    
+    features_array = np.array(features_list)
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features_array)
+    
+    pca = PCA(n_components=2)
     features_pca = pca.fit_transform(features_scaled)
     
     return features_pca, pca, scaler
@@ -1311,13 +1320,3 @@ with tab4:
     
     else:
         st.info("👆 Analysez au moins 2 tracks dans l'onglet Analyse pour générer une playlist")
-
-# Footer
-st.markdown("---")
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown("🧠 **Modèle:** CNN avec CBAM")
-with col2:
-    st.markdown("📊 **Méthode:** PCA + Distance euclidienne")  
-with col3:
-    st.markdown("💻 **Tech:** PyTorch, Librosa, Plotly")
