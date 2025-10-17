@@ -620,11 +620,6 @@ st.markdown("Créez des playlists personnalisées avec l'IA - Analyse de genres 
 
 # Barre latérale
 with st.sidebar:
-    st.header(_("⚙️ Configuration"))
-    
-    # Charger le modèle
-    st.subheader(_("🧠 Modèle CNN"))
-    
     # Essayer plusieurs chemins possibles
     model_path = "templates/assets/music/best_model_original_loss.pth"
     
