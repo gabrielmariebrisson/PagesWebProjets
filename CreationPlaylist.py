@@ -1,4 +1,5 @@
 import streamlit as st
+import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import os
 import librosa
@@ -8,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from io import BytesIO
 import tempfile
+import yt_dlp
 from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
@@ -16,13 +18,64 @@ from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
+import json
 from datetime import datetime
-import subprocess
-import warnings
 from templates.assets.music.architecture import SimpleCNN
-warnings.filterwarnings('ignore')
-
 load_dotenv()
+
+
+from deep_translator import GoogleTranslator
+
+# --- Configuration de la traduction automatique ---
+LANGUAGES = {
+    "fr": "🇫🇷 Français",
+    "en": "🇬🇧 English",
+    "es": "🇪🇸 Español",
+    "de": "🇩🇪 Deutsch",
+    "it": "🇮🇹 Italiano",
+    "pt": "🇵🇹 Português",
+    "ja": "🇯🇵 日本語",
+    "zh-CN": "🇨🇳 中文",
+    "ar": "🇸🇦 العربية",
+    "ru": "🇷🇺 Русский"
+}
+
+# Initialisation de la langue
+if 'language' not in st.session_state:
+    st.session_state.language = 'fr'
+
+# Sélecteur de langue
+lang = st.sidebar.selectbox(
+    "🌐 Language / Langue", 
+    options=list(LANGUAGES.keys()),
+    format_func=lambda x: LANGUAGES[x],
+    index=list(LANGUAGES.keys()).index(st.session_state.language)
+)
+
+st.session_state.language = lang
+
+# Cache pour les traductions (évite de retranduire à chaque fois)
+if 'translations_cache' not in st.session_state:
+    st.session_state.translations_cache = {}
+
+def _(text):
+    """Fonction de traduction automatique avec cache"""
+    if lang == 'fr':
+        return text
+    
+    # Vérifier le cache
+    cache_key = f"{lang}_{text}"
+    if cache_key in st.session_state.translations_cache:
+        return st.session_state.translations_cache[cache_key]
+    
+    # Traduire
+    try:
+        translated = GoogleTranslator(source='fr', target=lang).translate(text)
+        st.session_state.translations_cache[cache_key] = translated
+        return translated
+    except:
+        return text
+    
 
 # Configuration de la page Streamlit
 st.set_page_config(
@@ -31,221 +84,578 @@ st.set_page_config(
     layout="wide"
 )
 
-
-# Mapping des genres
-label_mapping = {
+# --- CONSTANTES ET CONFIGURATION ---
+LABEL_MAPPING = {
     0: 'blues', 1: 'classical', 2: 'country', 3: 'disco', 4: 'hiphop',
     5: 'jazz', 6: 'metal', 7: 'pop', 8: 'reggae', 9: 'rock'
 }
 
-genre_colors = {
+GENRE_COLORS = {
     'blues': '#1f77b4', 'classical': '#ff7f0e', 'country': '#2ca02c',
     'disco': '#d62728', 'hiphop': '#9467bd', 'jazz': '#8c564b',
     'metal': '#e377c2', 'pop': '#7f7f7f', 'reggae': '#bcbd22', 'rock': '#17becf'
 }
 
+SPOTIFY_SCOPE = "user-library-read user-top-read playlist-modify-public playlist-modify-private user-read-recently-played"
+DEEZER_BASE_URL = "https://api.deezer.com"
+
+# --- FONCTIONS DEEZER ---
+def search_deezer_tracks(query, limit=10):
+    """Recherche des tracks sur Deezer"""
+    try:
+        url = f"{DEEZER_BASE_URL}/search"
+        params = {
+            'q': query,
+            'limit': limit
+        }
+        
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            tracks = []
+            
+            for item in data.get('data', []):
+                track = {
+                    'id': item.get('id'),
+                    'name': item.get('title'),
+                    'artists': item.get('artist', {}).get('name', ''),
+                    'preview_url': item.get('preview'),
+                    'album': item.get('album', {}).get('title', ''),
+                    'duration': item.get('duration'),
+                    'deezer_id': item.get('id')
+                }
+                tracks.append(track)
+            
+            return tracks
+        else:
+            st.error(f"Erreur API Deezer: {response.status_code}")
+            return []
+    except Exception as e:
+        st.error(f"Erreur recherche Deezer: {str(e)}")
+        return []
+
+def download_deezer_preview(preview_url, output_path):
+    """Télécharge l'extrait audio de 30s depuis Deezer"""
+    try:
+        if not preview_url:
+            return False
+            
+        response = requests.get(preview_url)
+        if response.status_code == 200:
+            with open(output_path, 'wb') as f:
+                f.write(response.content)
+            return True
+        else:
+            return False
+    except Exception as e:
+        st.error(f"Erreur téléchargement Deezer: {str(e)}")
+        return False
+
+def get_deezer_track_info(track_id):
+    """Récupère les informations d'une track Deezer"""
+    try:
+        url = f"{DEEZER_BASE_URL}/track/{track_id}"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                'id': data.get('id'),
+                'name': data.get('title'),
+                'artists': data.get('artist', {}).get('name', ''),
+                'preview_url': data.get('preview'),
+                'album': data.get('album', {}).get('title', ''),
+                'duration': data.get('duration'),
+                'deezer_id': data.get('id')
+            }
+        return None
+    except Exception as e:
+        st.error(f"Erreur récupération track Deezer: {str(e)}")
+        return None
+
+# --- ARCHITECTURE DU MODÈLE ---
+def convert_song_to_matrix(audio_path, size=599):
+    """Convertit un fichier audio en spectrogramme normalisé"""
+    try:
+        y, sr = librosa.load(audio_path, duration=30)
+        n_fft = int((sr/10) / 2 + 3)
+        D = np.abs(librosa.stft(y, hop_length=int(n_fft)))
+        spectrogram = librosa.feature.melspectrogram(S=D, sr=sr)
+        S = librosa.util.fix_length(spectrogram, size=size)
+        S_db = librosa.power_to_db(S, ref=np.max)
+        S_db_norm = (S_db - S_db.min()) / (S_db.max() - S_db.min() + 1e-9)
+        return S_db_norm
+    except Exception as e:
+        st.error(f"Erreur conversion audio: {str(e)}")
+        return None
+
+@st.cache_resource
+def load_model(model_path):
+    """Charge le modèle CNN pré-entraîné"""
+    try:
+        model = SimpleCNN()
+        state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
+    except Exception as e:
+        st.error(f"Erreur chargement modèle: {str(e)}")
+        return None
+
+def extract_features(model, spectrogram_tensor):
+    """Extrait les features avant la couche de classification"""
+    with torch.no_grad():
+        x = spectrogram_tensor
+        x = model.norm1(x)
+        x = model.conv1(x)
+        x = model.relu(x)
+        x = model.cbam1(x)
+        x = model.pool1(x)
+        x = torch.permute(x,(0,2,1,3))
+        
+        x = model.norm2(x)
+        x = model.conv2(x)
+        x = model.relu(x)
+        x = model.cbam1(x)
+        x = model.pool2(x)
+        x = torch.permute(x,(0,2,1,3))
+        
+        x = model.norm3(x)
+        x = model.conv3(x)
+        x = model.relu(x)
+        x = model.cbam2(x)
+        x = model.pool2(x)
+        x = torch.permute(x,(0,2,1,3))
+        
+        x = model.norm4(x)
+        x = model.conv4(x)
+        x = model.cbam2(x)
+        x = model.relu(x)
+        x = torch.permute(x,(0,2,1,3))
+        
+        mean_values = torch.mean(x, dim=3, keepdim=True)
+        max_values, _ = torch.max(x, dim=3, keepdim=True)
+        l2_norm = torch.linalg.norm(x, dim=3, ord=2, keepdim=True)
+        
+        x = torch.cat([max_values, mean_values, l2_norm], dim=1)
+        x = x.view(-1, 1536)
+        
+        x = model.normfc2(x)
+        x = model.fc2(x)
+        features = F.relu(x)
+        
+        return features.cpu().numpy()
+
+def analyze_audio_genre(audio_path, model):
+    """Analyse un fichier audio et prédit son genre"""
+    spectrogram = convert_song_to_matrix(audio_path)
+    
+    if spectrogram is None:
+        return None, None, None, None
+    
+    if model is None:
+        genre_id = np.random.randint(0, 10)
+        confidence = np.random.uniform(0.6, 0.95)
+        return LABEL_MAPPING[genre_id], confidence, None, None
+    
+    try:
+        spectrogram_tensor = torch.tensor(spectrogram).unsqueeze(0).unsqueeze(0).float()
+        features = extract_features(model, spectrogram_tensor)
+        
+        with torch.no_grad():
+            output = model(spectrogram_tensor)
+            probabilities = F.softmax(output, dim=1)
+            genre_id = torch.argmax(probabilities, dim=1).item()
+            confidence = probabilities[0][genre_id].item()
+            all_probs = probabilities[0].cpu().numpy()
+        
+        return LABEL_MAPPING[genre_id], confidence, features[0], all_probs
+    except Exception as e:
+        st.error(f"Erreur prédiction: {str(e)}")
+        return None, None, None, None
+
+def perform_pca(features_list):
+    """Effectue une PCA sur les features extraites"""
+    if len(features_list) < 2:
+        return None, None, None
+    
+    features_array = np.array(features_list)
+    scaler = StandardScaler()
+    features_scaled = scaler.fit_transform(features_array)
+    
+    pca = PCA(n_components=2)
+    features_pca = pca.fit_transform(features_scaled)
+    
+    return features_pca, pca, scaler
+
+def generate_playlist_line(pca_df, track1_idx, track2_idx, num_tracks=10):
+    """Génère une playlist linéaire entre deux tracks"""
+    p1 = np.array([pca_df.iloc[track1_idx]['PC1'], pca_df.iloc[track1_idx]['PC2']])
+    p2 = np.array([pca_df.iloc[track2_idx]['PC1'], pca_df.iloc[track2_idx]['PC2']])
+    
+    t_values = np.linspace(0, 1, num_tracks)
+    line_points = np.array([p1 + t * (p2 - p1) for t in t_values])
+    
+    playlist_tracks = []
+    used_tracks = {track1_idx, track2_idx}
+    
+    for i, target_point in enumerate(line_points):
+        distances = []
+        for idx, row in pca_df.iterrows():
+            if idx not in used_tracks:
+                track_point = np.array([row['PC1'], row['PC2']])
+                distance = np.linalg.norm(track_point - target_point)
+                distances.append((distance, idx, row))
+        
+        if distances:
+            distances.sort(key=lambda x: x[0])
+            closest_distance, closest_idx, closest_row = distances[0]
+            
+            playlist_tracks.append({
+                'position': i + 1,
+                'index': closest_idx,
+                'name': closest_row['name'],
+                'genre': closest_row['genre'],
+                'distance': closest_distance,
+                'PC1': closest_row['PC1'],
+                'PC2': closest_row['PC2'],
+                'uri': closest_row.get('uri'),
+                'spotify_id': closest_row.get('spotify_id')
+            })
+            used_tracks.add(closest_idx)
+    
+    return playlist_tracks, line_points, p1, p2
+
+# --- FONCTIONS SPOTIFY ---
+def get_spotify_oauth():
+    """Retourne l'objet OAuth configuré pour Spotify"""
+    CLIENT_ID = os.getenv('CLIENT_ID_SPOTIFY')
+    CLIENT_SECRET = os.getenv('CLIENT_SECRET_SPOTIFY')
+    REDIRECT_URI = os.getenv('REDIRECT_URI_SPOTIFY', 'http://localhost:8501')
+    
+    if not CLIENT_ID or not CLIENT_SECRET:
+        return None
+    
+    return SpotifyOAuth(
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        redirect_uri=REDIRECT_URI,
+        scope=SPOTIFY_SCOPE,
+        cache_path=".spotify_cache",
+        show_dialog=True
+    )
+
+def get_spotify_client():
+    """Obtient un client Spotify authentifié"""
+    try:
+        sp_oauth = get_spotify_oauth()
+        if not sp_oauth:
+            return None
+        
+        # Vérifier le token en cache
+        token_info = sp_oauth.get_cached_token()
+        
+        # Gérer la redirection après authentification
+        query_params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
+        
+        if "code" in query_params:
+            code = query_params["code"]
+            if isinstance(code, list):
+                code = code[0]
+            
+            token_info = sp_oauth.get_access_token(code, as_dict=False)
+            # Nettoyer l'URL
+            if hasattr(st, "query_params"):
+                st.query_params.clear()
+            else:
+                st.experimental_set_query_params()
+            st.rerun()
+        
+        # Si token expiré, rafraîchir
+        if token_info and sp_oauth.is_token_expired(token_info):
+            token_info = sp_oauth.refresh_access_token(token_info['refresh_token'])
+        
+        if token_info:
+            return spotipy.Spotify(auth=token_info['access_token'])
+        
+        return None
+    except Exception as e:
+        st.error(_(f"Erreur d'authentification Spotify: {e}"))
+        return None
+
+def export_playlist_to_spotify(spotify_client, playlist_tracks, playlist_name, playlist_description=""):
+    """Exporte une playlist vers Spotify"""
+    try:
+        if not spotify_client:
+            st.error(_("❌ Client Spotify non disponible"))
+            return None
+        
+        user_info = spotify_client.current_user()
+        user_id = user_info['id']
+        
+        playlist = spotify_client.user_playlist_create(
+            user=user_id,
+            name=playlist_name,
+            public=False,
+            description=playlist_description
+        )
+        
+        track_uris = []
+        for track in playlist_tracks:
+            if track.get('uri'):
+                track_uris.append(track['uri'])
+            elif track.get('spotify_id'):
+                track_uris.append(f"spotify:track:{track['spotify_id']}")
+        
+        if track_uris:
+            for i in range(0, len(track_uris), 100):
+                batch = track_uris[i:i+100]
+                spotify_client.playlist_add_items(playlist['id'], batch)
+            
+            st.success(_(f"✅ Playlist '{playlist_name}' créée avec {len(track_uris)} titres!"))
+            st.markdown(_(f"[🎵 Ouvrir dans Spotify]{playlist['external_urls']['spotify']})"))
+            return playlist
+        else:
+            st.warning(_("⚠️ Aucun URI Spotify trouvé pour les tracks sélectionnées"))
+            return None
+    except Exception as e:
+        st.error(_(f"❌ Erreur lors de la création de la playlist: {e}"))
+        return None
+
+def get_user_saved_tracks(spotify_client, limit=50):
+    """Récupère les titres sauvegardés de l'utilisateur"""
+    try:
+        results = spotify_client.current_user_saved_tracks(limit=limit)
+        tracks = []
+        
+        for item in results['items']:
+            track = item['track']
+            
+            tracks.append({
+                'id': track['id'],
+                'name': track['name'],
+                'artists': ', '.join([artist['name'] for artist in track['artists']]),
+                'preview_url': track.get('preview_url'),
+                'uri': track['uri'],
+                'external_url': track['external_urls']['spotify']
+            })
+        
+        return tracks
+    except Exception as e:
+        st.error(f"Erreur lors de la récupération des titres sauvegardés: {e}")
+        return []
+    
+def get_user_top_tracks(spotify_client, limit=20):
+    """Récupère les top tracks de l'utilisateur"""
+    try:
+        top_tracks = spotify_client.current_user_top_tracks(limit=limit, time_range='medium_term')
+        tracks = []
+        
+        for track in top_tracks['items']:
+            tracks.append({
+                'id': track['id'],
+                'name': track['name'],
+                'artists': ', '.join([artist['name'] for artist in track['artists']]),
+                'preview_url': track.get('preview_url'),
+                'uri': track['uri'],
+                'external_url': track['external_urls']['spotify']
+            })
+        
+        return tracks
+    except Exception as e:
+        st.error(_(f"Erreur lors de la récupération des top tracks: {e}"))
+        return []
+
+def search_tracks_with_preview(spotify_client, query, limit=10):
+    """Recherche des tracks Spotify avec preview"""
+    try:
+        results = spotify_client.search(q=query, type='track', limit=limit)
+        tracks = []
+        
+        for track in results['tracks']['items']:
+            if track.get('preview_url'):
+                tracks.append({
+                    'id': track['id'],
+                    'name': track['name'],
+                    'artists': ', '.join([artist['name'] for artist in track['artists']]),
+                    'preview_url': track.get('preview_url'),
+                    'uri': track['uri'],
+                    'external_url': track['external_urls']['spotify']
+                })
+        
+        return tracks
+    except Exception as e:
+        st.error(_(f"Erreur recherche Spotify: {e}"))
+        return []
+
+# --- FONCTIONS D'ANALYSE ---
+
+def process_track_analysis(track, track_data):
+    """Traite l'analyse d'une track"""
+    try:
+        if st.session_state.model:
+            with st.spinner("Analyse en cours..."):
+                temp_dir = tempfile.mkdtemp()
+                audio_path = os.path.join(temp_dir, f"{track_data['type']}_{track_data['index']}.mp3")
+                
+                # Télécharger l'extrait selon la source
+                download_success = False
+                download_success = download_deezer_preview(track['preview_url'], audio_path)
+                
+                
+                if download_success:
+                    genre, confidence, features, probs = analyze_audio_genre(
+                        audio_path, st.session_state.model
+                    )
+                    
+                    if genre:
+                        artists = track.get('artists', '')
+                        analyzed_track = {
+                            'name': track['name'],
+                            'artists': artists,
+                            'spotify_id': track.get('id'),
+                            'deezer_id': track.get('deezer_id'),
+                            'uri': track.get('uri'),
+                            'preview_url': track.get('preview_url'),
+                            'genre': genre,
+                            'confidence': confidence,
+                            'features': features,
+                            'probabilities': probs
+                        }
+                        st.session_state.analyzed_tracks.append(analyzed_track)
+                        st.success(f"✅ {track['name']} - {genre} ({confidence:.1%})")
+                        return True
+                else:
+                    st.info(_("ℹ️ Aperçu audio non disponible pour l'analyse"))
+        else:
+            st.warning(_("Modèle non chargé"))
+        return False
+    except Exception as e:
+        st.error(_(f"Erreur lors de l'analyse: {e}"))
+        return False
+
+def process_track_addition(track):
+    """Traite l'ajout d'une track sans analyse"""
+    try:
+        artists = track.get('artists', '')
+        track_data = {
+            'name': track['name'],
+            'artists': artists,
+            'spotify_id': track.get('id'),
+            'deezer_id': track.get('deezer_id'),
+            'uri': track.get('uri'),
+            'preview_url': track.get('preview_url'),
+            'genre': 'Non analysé',
+            'confidence': 0.0
+        }
+        st.session_state.analyzed_tracks.append(track_data)
+        st.success(_(f"✅ {track['name']} ajouté!"))
+        return True
+    except Exception as e:
+        st.error(_(f"Erreur lors de l'ajout: {e}"))
+        return False
 
 
+# Bouton de redirection
+st.markdown(
+    f"""
+    <a href="https://gabriel.mariebrisson.fr" target="_blank" style="text-decoration:none;">
+    <div style="
+    display: inline-block;
+    background: linear-gradient(135deg, #6A11CB 0%, #2575FC 100%);
+    color: white;
+    padding: 12px 25px;
+    border-radius: 30px;
+    text-align: center;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(37, 117, 252, 0.3);
+    transition: all 0.3s ease;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border: 2px solid transparent;
+    position: relative;
+    overflow: hidden;
+    ">
+    {_("Retour")}
+    <span style="
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(255,255,255,0.2);
+    transform: scaleX(0);
+    transform-origin: right;
+    transition: transform 0.3s ease;
+    z-index: 1;
+    "></span>
+    </div>
+    </a>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# --- INITIALISATION SESSION STATE ---
+if 'model' not in st.session_state:
+    st.session_state.model = None
+if 'analyzed_tracks' not in st.session_state:
+    st.session_state.analyzed_tracks = []
+if 'spotify_top_tracks' not in st.session_state:
+    st.session_state.spotify_top_tracks = []
+if 'spotify_saved_tracks' not in st.session_state:
+    st.session_state.spotify_saved_tracks = []
+if 'current_playing_track' not in st.session_state:
+    st.session_state.current_playing_track = None
+if 'access_token' not in st.session_state:
+    st.session_state.access_token = None
+if 'deezer_search_results' not in st.session_state:
+    st.session_state.deezer_search_results = []
 
 # --- INTERFACE STREAMLIT PRINCIPALE ---
 st.title("🎵 Music Playlist Generator")
 st.markdown("Créez des playlists personnalisées avec l'IA - Analyse de genres musicaux par CNN")
 
-# Configuration des variables d'environnement
-CLIENT_ID = os.getenv('CLIENT_ID_SPOTIFY')
-CLIENT_SECRET = os.getenv('CLIENT_SECRET_SPOTIFY')
-REDIRECT_URI = os.getenv('REDIRECT_URI_SPOTIFY')
-
-# Initialisation de la session state
-if 'analyzed_tracks' not in st.session_state:
-    st.session_state.analyzed_tracks = []
-if 'spotify_client' not in st.session_state:
-    st.session_state.spotify_client = None
-if 'user_top_tracks' not in st.session_state:
-    st.session_state.user_top_tracks = []
-if 'user_recent_tracks' not in st.session_state:
-    st.session_state.user_recent_tracks = []
-
-# Instance unique de SpotifyOAuth (réutilisée partout)
-sp_oauth = SpotifyOAuth(
-    client_id=CLIENT_ID,
-    client_secret=CLIENT_SECRET,
-    redirect_uri=REDIRECT_URI,
-    scope="user-library-read user-top-read playlist-modify-public playlist-modify-private user-read-recently-played user-read-email",
-    cache_path=".spotify_cache"
-)
-
-def get_spotify_client():
-    """Obtient le client Spotify authentifié"""
-    
-    # Si déjà connecté
-    if st.session_state.spotify_client:
-        return st.session_state.spotify_client
-    
-    # Vérifier le token dans les paramètres d'URL (après redirection)
-    if "code" in st.query_params:
-        try:
-            token_info = sp_oauth.get_access_token(st.query_params["code"])
-            if token_info:
-                spotify_client = spotipy.Spotify(auth=token_info['access_token'])
-                st.session_state.spotify_client = spotify_client
-                # Nettoyer l'URL
-                st.query_params.clear()
-                st.rerun()
-        except Exception as e:
-            st.error(f"Erreur d'authentification: {e}")
-    
-    # Vérifier le cache
-    try:
-        token_info = sp_oauth.get_cached_token()
-        if token_info and not sp_oauth.is_token_expired(token_info):
-            spotify_client = spotipy.Spotify(auth=token_info['access_token'])
-            st.session_state.spotify_client = spotify_client
-    except Exception:
-        pass
-    
-    return st.session_state.spotify_client
-
-def get_user_top_tracks(spotify_client, limit=20, time_range='medium_term'):
-    """Récupère les musiques les plus écoutées de l'utilisateur"""
-    try:
-        results = spotify_client.current_user_top_tracks(
-            limit=limit, 
-            time_range=time_range
-        )
-        
-        tracks = []
-        for track in results['items']:
-            track_data = {
-                'id': track['id'],
-                'name': track['name'],
-                'artists': [artist['name'] for artist in track['artists']],
-                'preview_url': track.get('preview_url'),
-                'uri': track['uri'],
-                'external_urls': track['external_urls'],
-                'album': track['album']['name'],
-                'album_image': track['album']['images'][0]['url'] if track['album']['images'] else None,
-                'popularity': track['popularity'],
-                'duration_ms': track['duration_ms']
-            }
-            tracks.append(track_data)
-        
-        return tracks
-    except Exception as e:
-        st.error(f"Erreur lors de la récupération des musiques: {e}")
-        return []
-
-def get_user_recent_tracks(spotify_client, limit=20):
-    """Récupère les musiques récemment écoutées"""
-    try:
-        results = spotify_client.current_user_recently_played(limit=limit)
-        
-        tracks = []
-        seen_ids = set()
-        
-        for item in results['items']:
-            track = item['track']
-            # Éviter les doublons
-            if track['id'] not in seen_ids:
-                seen_ids.add(track['id'])
-                track_data = {
-                    'id': track['id'],
-                    'name': track['name'],
-                    'artists': [artist['name'] for artist in track['artists']],
-                    'preview_url': track.get('preview_url'),
-                    'uri': track['uri'],
-                    'external_urls': track['external_urls'],
-                    'album': track['album']['name'],
-                    'album_image': track['album']['images'][0]['url'] if track['album']['images'] else None,
-                    'played_at': item['played_at']
-                }
-                tracks.append(track_data)
-        
-        return tracks
-    except Exception as e:
-        st.error(f"Erreur lors de la récupération des musiques récentes: {e}")
-        return []
-
-def download_preview_audio(preview_url, track_name):
-    """Télécharge l'extrait audio d'une musique"""
-    try:
-        with st.spinner(f"Téléchargement de l'extrait de '{track_name}'..."):
-            response = requests.get(preview_url, timeout=20)
-            
-            if response.status_code == 200:
-                # Créer un fichier temporaire
-                temp_dir = tempfile.mkdtemp()
-                file_path = os.path.join(temp_dir, f"{track_name[:30]}.mp3")
-                
-                with open(file_path, 'wb') as f:
-                    f.write(response.content)
-                
-                file_size = os.path.getsize(file_path)
-                if file_size > 1000:
-                    st.success(f"✅ Extrait téléchargé ({file_size // 1024} KB)")
-                    return file_path
-                else:
-                    st.error("❌ Fichier audio trop petit ou corrompu")
-                    return None
-            else:
-                st.error(f"❌ Erreur HTTP {response.status_code}")
-                return None
-    except Exception as e:
-        st.error(f"❌ Erreur de téléchargement: {str(e)}")
-        return None
-
-def format_duration(ms):
-    """Convertit la durée en millisecondes en format mm:ss"""
-    seconds = ms // 1000
-    minutes = seconds // 60
-    seconds = seconds % 60
-    return f"{minutes}:{seconds:02d}"
-
-# Configuration de la page
-st.set_page_config(page_title="Spotify Music Analyzer", page_icon="🎵", layout="wide")
-
-# Barre latérale - Authentification
+# Barre latérale
 with st.sidebar:
-    st.title("🎵 Spotify Analyzer")
-    st.markdown("---")
+    st.header(_("⚙️ Configuration"))
     
-    # Authentification
+    # Charger le modèle
+    st.subheader(_("🧠 Modèle CNN"))
+    
+    # Essayer plusieurs chemins possibles
+    model_path = "templates/assets/music/best_model_original_loss.pth"
+    
+    model_loaded = False
+    with st.spinner(_("Chargement...")):
+        st.session_state.model = load_model(model_path)
+    
+    if not model_loaded:
+        st.error(_("❌ Aucun modèle trouvé"))
+
+    # Connexion Spotify
+    st.subheader(_("🔗 Connexion Spotify"))
+    
+    CLIENT_ID_SPOTIFY = os.getenv('CLIENT_ID_SPOTIFY')
+    CLIENT_SECRET_SPOTIFY = os.getenv('CLIENT_SECRET_SPOTIFY')
+    
     spotify_client = get_spotify_client()
-    
-    if spotify_client:
-        try:
-            user_info = spotify_client.current_user()
-            st.success("✅ **Connecté**")
-            
-            if user_info.get('images'):
-                st.image(user_info['images'][0]['url'], width=100)
-            
-            st.markdown(f"**{user_info['display_name']}**")
-            st.caption(f"ID: {user_info['id']}")
-            
-            st.markdown("---")
-            
-            # Bouton de déconnexion
-            if st.button("🚪 Se déconnecter", type="secondary", use_container_width=True):
-                st.session_state.spotify_client = None
-                st.session_state.user_top_tracks = []
-                st.session_state.user_recent_tracks = []
-                if os.path.exists(".spotify_cache"):
-                    os.remove(".spotify_cache")
-                st.rerun()
-                
-        except Exception as e:
-            st.error(f"❌ Erreur de connexion: {e}")
-            st.session_state.spotify_client = None
-    else:
-        st.info("👋 Connectez-vous pour commencer")
-        
-        # Génération de l'URL d'autorisation avec l'instance globale
+
+
+    sp_oauth = get_spotify_oauth()
+    if sp_oauth:
         auth_url = sp_oauth.get_authorize_url()
-        
+        st.markdown(_(f"""
+        **Étapes de connexion:** 
+        1. Cliquez sur le bouton ci-dessous
+        2. Autorisez l'application sur Spotify  
+        3. Vous serez redirigé vers cette page"""), unsafe_allow_html=True)
         st.markdown(f"""
+        
         <a href="{auth_url}" target="_self">
-            <button style="
+            <div style="
                 background-color: #1DB954; 
                 color: white; 
                 padding: 12px 24px; 
@@ -256,201 +666,218 @@ with st.sidebar:
                 font-weight: bold;
                 width: 100%;
                 border: none;
-                cursor: pointer;
-                font-size: 16px;">
-            🎵 Se connecter avec Spotify
-            </button>
+                cursor: pointer;">
+            {_("🎵 Se connecter avec Spotify")}
+            </div>
         </a>
         """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.caption("L'application nécessite votre autorisation pour accéder à vos données Spotify.")
 
-tab1, tab2, tab3, tab4 = st.tabs(["🏠 Accueil", "🎧 Mes Musiques", "📊 Analyse", "🎨 Playlist"])
-# Contenu principal
-if not spotify_client:
-    # Page d'accueil non connecté
-    st.title("🎵 Analyseur de Musique Spotify")
-    st.markdown("### Bienvenue ! 👋")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.info("**🎧 Vos musiques**\n\nAccédez à vos titres les plus écoutés et votre historique récent")
-    
-    with col2:
-        st.info("**📥 Extraits audio**\n\nTéléchargez les aperçus de 30 secondes de vos musiques")
-    
-    with col3:
-        st.info("**📊 Statistiques**\n\nDécouvrez vos préférences musicales")
-    
+    # Bouton de reset
     st.markdown("---")
-    st.markdown("### 🚀 Pour commencer")
-    st.markdown("""
-    1. Cliquez sur **"Se connecter avec Spotify"** dans la barre latérale
-    2. Autorisez l'application à accéder à vos données
-    3. Explorez vos musiques et téléchargez des extraits !
-    """)
+    if st.button(_("🔄 Réinitialiser tout"), type="secondary"):
+        for key in list(st.session_state.keys()):
+            if key != 'model':
+                del st.session_state[key]
+        st.success(_("✅ Réinitialisé!"))
+        st.rerun()
 
-else:
-    # Interface principale
-    st.title("🎵 Mes Musiques Spotify")
+# Tabs principaux
+tab1, tab2, tab3, tab4, tab5 = st.tabs([_("🏠 Accueil"), _("🎧 Mes Musiques"), _("🔍 Recherche Deezer"), _("📊 Analyse"), _("🎨 Playlist")])
+
+# Tab 1: Accueil
+with tab1:
+    st.header(_("🎵 Analyseur de Musique"))
+    st.markdown(_("""
+    Bienvenue dans votre analyseur de musique personnel !
     
-    # Onglets
-    tab1, tab2 = st.tabs(["🏆 Top Titres", "🕐 Récemment Écoutés"])
+    **Fonctionnalités :**
+    - 📊 Analyse des genres de vos musiques préférées
+    - 🎧 Récupération de vos musiques depuis Spotify
+    - 🔍 Recherche et analyse depuis Deezer
+    - 🔍 Classification automatique par IA
+    - 🎨 Création de playlists intelligentes
+    
+    **Commencez par :**
+    1. Vous connecter à Spotify dans la barle latérale (optionnel)
+    2. Aller dans l'onglet "🎧 Mes Musiques" ou "🔍 Recherche Deezer"
+    3. Charger et analyser vos musiques
+    """))
 
-    # Tab 1: Top Titres
-    with tab1:
-        st.subheader("🎵 Mes titres les plus écoutés")
+# Tab 2: Mes Musiques (Spotify)
+with tab2:
+    st.header(_("🎧 Importer depuis Spotify"))
+    
+    if spotify_client:
+        # Section Titres Sauvegardés
+        st.subheader(_("💾 Mes titres sauvegardés"))
         
-        col1, col2 = st.columns([2, 1])
-        
+        col1, col2 = st.columns([3, 1])
         with col1:
-            time_range = st.selectbox(
-                "📅 Période d'écoute :",
-                ["short_term", "medium_term", "long_term"],
-                format_func=lambda x: {
-                    "short_term": "🔥 4 dernières semaines", 
-                    "medium_term": "📊 6 derniers mois", 
-                    "long_term": "⭐ Tout le temps"
-                }[x],
-                key="time_range_select"
-            )
+            limit_tracks = st.slider(_("Nombre de titres à importer:"), 10, 100, 20, key="saved_slider")
         
         with col2:
-            limit = st.number_input("Nombre de titres", min_value=5, max_value=50, value=20, step=5)
+            if st.button(_("🔄 Charger mes titres"), key="load_saved"):
+                with st.spinner(_("Récupération de vos titres...")):
+                    saved_tracks = get_user_saved_tracks(spotify_client, limit=limit_tracks)
+                    st.session_state.spotify_saved_tracks = saved_tracks
+                    st.success(_(f"✅ {len(saved_tracks)} titres chargés!"))
         
-        if st.button("🔄 Charger mes top titres", type="primary", use_container_width=True):
-            with st.spinner("Récupération de vos musiques..."):
-                top_tracks = get_user_top_tracks(spotify_client, limit=limit, time_range=time_range)
-                st.session_state.user_top_tracks = top_tracks
-                
-                if top_tracks:
-                    tracks_with_preview = sum(1 for t in top_tracks if t.get('preview_url'))
-                    st.success(f"✅ {len(top_tracks)} titres chargés ({tracks_with_preview} avec extraits audio)")
-                else:
-                    st.error("❌ Aucun titre récupéré")
-        
-        # Affichage des top titres
-        if st.session_state.user_top_tracks:
-            st.markdown("---")
-            st.markdown(f"**{len(st.session_state.user_top_tracks)} titres**")
+        # Afficher les titres sauvegardés
+        if st.session_state.spotify_saved_tracks:
+            st.subheader(_(f"Vos titres ({len(st.session_state.spotify_saved_tracks)})"))
             
-            for i, track in enumerate(st.session_state.user_top_tracks):
-                with st.expander(f"#{i+1} · {track['name']} - {', '.join(track['artists'])}"):
-                    col1, col2 = st.columns([1, 3])
-                    
-                    with col1:
-                        if track.get('album_image'):
-                            st.image(track['album_image'], width=150)
-                    
-                    with col2:
-                        st.markdown(f"**🎵 Titre :** {track['name']}")
-                        st.markdown(f"**🎤 Artiste(s) :** {', '.join(track['artists'])}")
-                        st.markdown(f"**💿 Album :** {track['album']}")
-                        st.markdown(f"**⭐ Popularité :** {track['popularity']}/100")
-                        st.markdown(f"**⏱️ Durée :** {format_duration(track['duration_ms'])}")
-                        
-                        # Lien Spotify
-                        if track.get('external_urls', {}).get('spotify'):
-                            st.markdown(f"[🎵 Ouvrir dans Spotify]({track['external_urls']['spotify']})")
-                    
-                    st.markdown("---")
-                    
-                    # Extrait audio
-                    if track.get('preview_url'):
-                        st.audio(track['preview_url'], format="audio/mp3")
-                        
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button(f"📥 Télécharger l'extrait", key=f"download_top_{i}"):
-                                downloaded_file = download_preview_audio(
-                                    track['preview_url'], 
-                                    track['name']
-                                )
-                                if downloaded_file:
-                                    with open(downloaded_file, 'rb') as f:
-                                        st.download_button(
-                                            label="💾 Enregistrer le fichier",
-                                            data=f,
-                                            file_name=f"{track['name'][:30]}.mp3",
-                                            mime="audio/mpeg",
-                                            key=f"save_top_{i}"
-                                        )
-                    else:
-                        st.warning("❌ Aucun extrait audio disponible pour ce titre")
-    
-    # Tab 2: Récemment Écoutés
-    with tab2:
-        st.subheader("🕐 Récemment écoutés")
-        
-        limit_recent = st.number_input("Nombre de titres récents", min_value=5, max_value=50, value=20, step=5, key="limit_recent")
-        
-        if st.button("🔄 Charger l'historique récent", type="primary", use_container_width=True):
-            with st.spinner("Récupération de l'historique..."):
-                recent_tracks = get_user_recent_tracks(spotify_client, limit=limit_recent)
-                st.session_state.user_recent_tracks = recent_tracks
+            for i, track in enumerate(st.session_state.spotify_saved_tracks[:20]):
+                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                 
-                if recent_tracks:
-                    tracks_with_preview = sum(1 for t in recent_tracks if t.get('preview_url'))
-                    st.success(f"✅ {len(recent_tracks)} titres chargés ({tracks_with_preview} avec extraits audio)")
-                else:
-                    st.error("❌ Aucun historique récupéré")
+                with col1:
+                    st.markdown(f"**{track['name']}**")
+                    st.caption(_(f"Artiste: {track['artists']}"))
+                
+                with col3:
+                    if st.button(_("🔍 Analyser"), key=f"analyze_saved_{i}"):
+                        if process_track_analysis(track, {"type": "saved", "index": i}):
+                            st.rerun()
+                
+                with col4:
+                    if st.button(_("➕ Ajouter"), key=f"add_saved_{i}"):
+                        if process_track_addition(track):
+                            st.rerun()
         
-        # Affichage des titres récents
-        if st.session_state.user_recent_tracks:
-            st.markdown("---")
-            st.markdown(f"**{len(st.session_state.user_recent_tracks)} titres récents**")
+        st.markdown("---")
+        
+        # Section Top Tracks
+        st.subheader(_("🎯 Top tracks"))
+        
+        if st.button(_("📊 Charger top tracks")):
+            with st.spinner(_("Récupération...")):
+                top_tracks = get_user_top_tracks(spotify_client, limit=20)
+                st.session_state.spotify_top_tracks = top_tracks
+                st.success(_(f"✅ {len(top_tracks)} top tracks chargés"))
+                st.rerun()
+        
+        # Afficher les top tracks
+        if st.session_state.spotify_top_tracks:
+            st.markdown(_("### Vos top tracks"))
             
-            for i, track in enumerate(st.session_state.user_recent_tracks):
-                with st.expander(f"{track['name']} - {', '.join(track['artists'])}"):
-                    col1, col2 = st.columns([1, 3])
+            for i, track in enumerate(st.session_state.spotify_top_tracks[:20]):
+                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                
+                with col1:
+                    st.write(f"**{track['name']}**")
+                    st.caption(_(f"Artiste: {track['artists']}"))
+                
+                with col3:
+                    if st.button(_("🔍 Analyser"), key=f"analyze_top_{i}"):
+                        if process_track_analysis(track, {"type": "top", "index": i}):
+                            st.rerun()
+                
+                with col4:
+                    if st.button(_("➕ Ajouter"), key=f"add_top_{i}"):
+                        if process_track_addition(track):
+                            st.rerun()
+        
+        st.markdown("---")
+        
+        # Section Recherche Spotify
+        st.subheader(_("🔍 Rechercher des titres Spotify"))
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            search_query = st.text_input(_("Rechercher un titre:"), placeholder=_("Nom de la chanson ou artiste..."), key="spotify_search")
+        with col2:
+            search_limit = st.slider(_("Résultats"), 5, 20, 10, key="search_slider")
+        
+        if search_query:
+            with st.spinner(_("Recherche en cours...")):
+                search_results = search_tracks_with_preview(spotify_client, search_query, search_limit)
+                
+                if search_results:
+                    st.success(_(f"✅ {len(search_results)} titres trouvés!"))
                     
-                    with col1:
-                        if track.get('album_image'):
-                            st.image(track['album_image'], width=150)
-                    
-                    with col2:
-                        st.markdown(f"**🎵 Titre :** {track['name']}")
-                        st.markdown(f"**🎤 Artiste(s) :** {', '.join(track['artists'])}")
-                        st.markdown(f"**💿 Album :** {track['album']}")
-                        st.markdown(f"**🕐 Écouté le :** {track.get('played_at', 'N/A')}")
+                    for i, track in enumerate(search_results):
+                        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                         
-                        # Lien Spotify
-                        if track.get('external_urls', {}).get('spotify'):
-                            st.markdown(f"[🎵 Ouvrir dans Spotify]({track['external_urls']['spotify']})")
-                    
-                    st.markdown("---")
-                    
-                    # Extrait audio
-                    if track.get('preview_url'):
-                        st.audio(track['preview_url'], format="audio/mp3")
+                        with col1:
+                            st.write(f"**{track['name']}**")
+                            st.caption(_(f"Artiste: {track['artists']}"))
                         
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button(f"📥 Télécharger l'extrait", key=f"download_recent_{i}"):
-                                downloaded_file = download_preview_audio(
-                                    track['preview_url'], 
-                                    track['name']
-                                )
-                                if downloaded_file:
-                                    with open(downloaded_file, 'rb') as f:
-                                        st.download_button(
-                                            label="💾 Enregistrer le fichier",
-                                            data=f,
-                                            file_name=f"{track['name'][:30]}.mp3",
-                                            mime="audio/mpeg",
-                                            key=f"save_recent_{i}"
-                                        )
-                    else:
-                        st.warning("❌ Aucun extrait audio disponible pour ce titre")
+                        with col3:
+                            if st.button(_("🔍 Analyser"), key=f"analyze_search_{i}"):
+                                if process_track_analysis(track, {"type": "search", "index": i}):
+                                    st.rerun()
+                        
+                        with col4:
+                            if st.button(_("➕ Ajouter"), key=f"add_search_{i}"):
+                                if process_track_addition(track):
+                                    st.rerun()
+                else:
+                    st.warning(_("Aucun titre trouvé pour cette recherche."))
+    else:
+        st.warning(_("⚠️ Connectez-vous à Spotify pour importer vos musiques"))
 
-# Tab 3: Analyse
+# Nouveau Tab: Recherche Deezer
 with tab3:
-    st.header("📊 Analyse des genres")
+    st.header(_("🔍 Recherche Deezer"))
+    st.markdown(_("Recherchez et analysez des morceaux directement depuis Deezer (extraits de 30 secondes)"))
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        deezer_query = st.text_input(_("Rechercher un titre sur Deezer:"), placeholder="Nom de la chanson ou artiste...")
+    with col2:
+        deezer_limit = st.slider(_("Nombre de résultats"), 5, 20, 10, key="deezer_slider")
+    
+    if deezer_query:
+        if st.button(_("🔍 Rechercher sur Deezer"), type="primary"):
+            with st.spinner(_("Recherche en cours...")):
+                deezer_results = search_deezer_tracks(deezer_query, deezer_limit)
+                st.session_state.deezer_search_results = deezer_results
+                
+                if deezer_results:
+                    st.success(_(f"✅ {len(deezer_results)} titres trouvés sur Deezer!"))
+                else:
+                    st.warning(_("Aucun titre trouvé sur Deezer."))
+    
+    # Afficher les résultats Deezer
+    if st.session_state.deezer_search_results:
+        st.subheader(_("Résultats Deezer"))
+        
+        for i, track in enumerate(st.session_state.deezer_search_results):
+            col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+            
+            with col1:
+                st.markdown(f"**{track['name']}**")
+                st.caption(_(f"Artiste: {track['artists']}"))
+                if track.get('album'):
+                    st.caption(_(f"Album: {track['album']}"))
+            
+            with col2:
+                if track.get('preview_url'):
+                    st.markdown(_("🎵 **30s**"))
+                else:
+                    st.markdown(_("❌ **No preview**"))
+            
+            with col3:
+                if st.button(_("🎵 Écouter"), key=f"preview_deezer_{i}"):
+                    if track.get('preview_url'):
+                        st.audio(track['preview_url'], format="audio/mp3")
+                    else:
+                        st.warning("Aucun extrait disponible")
+            
+            with col4:
+                if st.button(_("🔍 Analyser"), key=f"analyze_deezer_{i}"):
+                    if process_track_analysis(track, {"type": "deezer", "index": i}):
+                        st.rerun()
+            
+            with col5:
+                if st.button(_("➕ Ajouter"), key=f"add_deezer_{i}"):
+                    if process_track_addition(track):
+                        st.rerun()
+
+# Tab 4: Analyse
+with tab4:
+    st.header(_("📊 Analyse des genres"))
     
     if st.session_state.analyzed_tracks:
-        # Filtrer les tracks avec des données valides
         valid_tracks = [t for t in st.session_state.analyzed_tracks if t.get('genre') != 'Non analysé']
         
         if valid_tracks:
@@ -461,16 +888,16 @@ with tab3:
             col1.metric("Total tracks", len(df))
             col2.metric("Genres uniques", df['genre'].nunique())
             col3.metric("Confiance moy.", f"{df['confidence'].mean():.1%}")
-            
+
             # Distribution des genres
-            st.subheader("Distribution des genres")
+            st.subheader(_("Distribution des genres"))
             genre_counts = df['genre'].value_counts()
             
             fig = px.bar(
                 x=genre_counts.index, 
                 y=genre_counts.values,
                 color=genre_counts.index,
-                color_discrete_map=genre_colors,
+                color_discrete_map=GENRE_COLORS,
                 labels={'x': 'Genre', 'y': 'Nombre de tracks'}
             )
             fig.update_layout(showlegend=False, height=400)
@@ -478,7 +905,7 @@ with tab3:
             
             # PCA Visualization
             if len(valid_tracks) >= 2:
-                st.subheader("Visualisation PCA")
+                st.subheader(_("Visualisation PCA"))
                 
                 features_list = [t['features'] for t in valid_tracks if t.get('features') is not None]
                 
@@ -490,7 +917,10 @@ with tab3:
                             'PC1': pca_result[:, 0],
                             'PC2': pca_result[:, 1],
                             'name': [t['name'][:30] for t in valid_tracks if t.get('features') is not None],
-                            'genre': [t['genre'] for t in valid_tracks if t.get('features') is not None]
+                            'genre': [t['genre'] for t in valid_tracks if t.get('features') is not None],
+                            'artists': [t['artists'] for t in valid_tracks if t.get('features') is not None],
+                            'uri': [t.get('uri') for t in valid_tracks if t.get('features') is not None],
+                            'spotify_id': [t.get('spotify_id') for t in valid_tracks if t.get('features') is not None],
                         })
                         
                         fig = px.scatter(
@@ -498,56 +928,97 @@ with tab3:
                             x='PC1', 
                             y='PC2',
                             color='genre',
-                            color_discrete_map=genre_colors,
-                            hover_data=['name'],
+                            color_discrete_map=GENRE_COLORS,
+                            hover_data=['name', 'artists'],
                             title='Espace PCA des tracks'
                         )
                         fig.update_traces(marker=dict(size=12))
                         fig.update_layout(height=600)
                         st.plotly_chart(fig, use_container_width=True)
                         
-                        # Stocker pour la génération de playlist
                         st.session_state.pca_df = pca_df
             
-            # Tableau détaillé
-            st.subheader("Détails des tracks")
-            display_df = df[['name', 'genre', 'confidence', 'source']].copy()
-            display_df['confidence'] = display_df['confidence'].apply(lambda x: f"{x:.1%}")
-            st.dataframe(display_df, use_container_width=True)
+            st.subheader(_("Détails des tracks"))
+            
+            for idx, track in enumerate(valid_tracks[:20]):
+                col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+                
+                with col1:
+                    st.markdown(f"**{track['name']}**")
+                    st.caption(f"{track['artists']} - {track['genre']} ({track['confidence']:.1%})")
+                
+                with col3:
+                    if track.get('preview_url'):
+                        if st.button("🎵", key=f"preview_{idx}"):
+                            st.audio(track['preview_url'], format="audio/mp3")
+                
+                with col4:
+                    st.markdown(f"🎯 {track['confidence']:.1%}")
+                
+                with col5:
+                    st.markdown(f"**{track['genre']}**")
         else:
-            st.info("👆 Analysez des tracks pour voir les statistiques")
+            st.info(_("👆 Analysez des tracks pour voir les statistiques"))
     else:
-        st.info("👆 Ajoutez des tracks pour voir l'analyse")
+        st.info(_("👆 Ajoutez des tracks pour voir l'analyse"))
 
-# Tab 4: Génération de playlist
-with tab4:
-    st.header("🎨 Générateur de Playlist")
+# Tab 5: Playlist
+with tab5:
+    st.header(_("🎨 Générateur de Playlist"))
     
-    if 'pca_df' in st.session_state and len(st.session_state.pca_df) >= 2:
-        st.markdown("Sélectionnez deux tracks pour créer une playlist progressive entre elles")
+    # Vérifier les prérequis
+    prerequisites_ok = True
+    
+    if len(st.session_state.analyzed_tracks) < 2:
+        st.warning(_("⚠️ **Prérequis**: Analysez au moins 2 morceaux"))
+        prerequisites_ok = False
+    
+    if 'pca_df' not in st.session_state:
+        st.warning(_("⚠️ **Prérequis**: Effectuez d'abord l'analyse PCA dans l'onglet '📊 Analyse'"))
+        prerequisites_ok = False
+    
+    if not prerequisites_ok:
+        st.info(_("""
+        **Étapes pour créer une playlist:**
+        1. 🎧 **Mes Musiques** ou 🔍 **Recherche Deezer**: Importez et analysez vos morceaux
+        2. 📊 **Analyse**: Laissez le système analyser les caractéristiques audio  
+        3. 🎨 **Playlist**: Créez votre playlist personnalisée ici
+        """))
+        
+        # Afficher l'état actuel
+        st.subheader(_("État actuel"))
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(_("Morceaux analysés"), len(st.session_state.analyzed_tracks))
+        with col2:
+            valid_tracks = len([t for t in st.session_state.analyzed_tracks if t.get('features') is not None])
+            st.metric(_("Avec features"), valid_tracks)
+    
+    elif len(st.session_state.pca_df) >= 2:
+        st.markdown(_("Sélectionnez deux tracks pour créer une playlist progressive entre elles"))
         
         col1, col2 = st.columns(2)
         
         with col1:
             track1_idx = st.selectbox(
-                "Track de départ:",
+                _("Track de départ:"),
                 range(len(st.session_state.pca_df)),
                 format_func=lambda x: f"{st.session_state.pca_df.iloc[x]['name']} ({st.session_state.pca_df.iloc[x]['genre']})"
             )
         
         with col2:
             track2_idx = st.selectbox(
-                "Track d'arrivée:",
+                _("Track d'arrivée:"),
                 range(len(st.session_state.pca_df)),
                 index=min(1, len(st.session_state.pca_df)-1),
                 format_func=lambda x: f"{st.session_state.pca_df.iloc[x]['name']} ({st.session_state.pca_df.iloc[x]['genre']})"
             )
         
-        num_tracks = st.slider("Nombre de tracks dans la playlist:", 5, 20, 10)
+        num_tracks = st.slider(_("Nombre de tracks dans la playlist:"), 5, 20, 10)
         
-        if st.button("🎯 Générer la playlist", type="primary"):
+        if st.button(_("🎯 Générer la playlist"), type="primary"):
             if track1_idx != track2_idx:
-                with st.spinner("Génération..."):
+                with st.spinner(_("Génération...")):
                     playlist, line_points, p1, p2 = generate_playlist_line(
                         st.session_state.pca_df, track1_idx, track2_idx, num_tracks
                     )
@@ -556,180 +1027,130 @@ with tab4:
                     st.session_state.line_points = line_points
                     st.session_state.p1 = p1
                     st.session_state.p2 = p2
-                    st.success(f"✅ Playlist de {len(playlist)} tracks générée!")
+                    st.success(_(f"✅ Playlist de {len(playlist)} tracks générée!"))
             else:
-                st.warning("⚠️ Sélectionnez deux tracks différentes")
+                st.warning(_("⚠️ Sélectionnez deux tracks différentes"))
         
         # Afficher la playlist générée
-        if 'generated_playlist' in st.session_state:
-            st.subheader("📝 Playlist générée")
+        if 'generated_playlist' in st.session_state and st.session_state.generated_playlist:
+            st.subheader(_("📋 Playlist Générée"))
             
             # Visualisation
             fig = go.Figure()
             
-            # Tous les points
-            for genre in st.session_state.pca_df['genre'].unique():
-                mask = st.session_state.pca_df['genre'] == genre
-                genre_data = st.session_state.pca_df[mask]
-                fig.add_trace(go.Scatter(
-                    x=genre_data['PC1'],
-                    y=genre_data['PC2'],
-                    mode='markers',
-                    name=genre,
-                    marker=dict(size=8, color=genre_colors.get(genre, '#999'), opacity=0.3),
-                    text=genre_data['name'],
-                    hovertemplate='%{text}<br>Genre: ' + genre
-                ))
+            # Points PCA
+            fig.add_trace(go.Scatter(
+                x=st.session_state.pca_df['PC1'],
+                y=st.session_state.pca_df['PC2'],
+                mode='markers',
+                marker=dict(size=8, color='lightgray'),
+                name='Autres tracks',
+                hovertext=st.session_state.pca_df['name']
+            ))
             
             # Ligne de la playlist
-            fig.add_trace(go.Scatter(
-                x=st.session_state.line_points[:, 0],
-                y=st.session_state.line_points[:, 1],
-                mode='lines',
-                name='Trajectoire',
-                line=dict(color='black', width=2, dash='dash')
-            ))
+            if 'line_points' in st.session_state:
+                fig.add_trace(go.Scatter(
+                    x=st.session_state.line_points[:, 0],
+                    y=st.session_state.line_points[:, 1],
+                    mode='lines',
+                    line=dict(color='red', dash='dash'),
+                    name='Trajectoire'
+                ))
             
-            # Points de départ et d'arrivée
+            # Points de la playlist
+            playlist_df = pd.DataFrame(st.session_state.generated_playlist)
             fig.add_trace(go.Scatter(
-                x=[st.session_state.p1[0]],
-                y=[st.session_state.p1[1]],
-                mode='markers',
-                name='Départ',
-                marker=dict(size=20, color='blue', symbol='star')
-            ))
-            
-            fig.add_trace(go.Scatter(
-                x=[st.session_state.p2[0]],
-                y=[st.session_state.p2[1]],
-                mode='markers',
-                name='Arrivée',
-                marker=dict(size=20, color='green', symbol='star')
-            ))
-            
-            # Tracks de la playlist
-            playlist_x = [t['PC1'] for t in st.session_state.generated_playlist]
-            playlist_y = [t['PC2'] for t in st.session_state.generated_playlist]
-            playlist_names = [t['name'] for t in st.session_state.generated_playlist]
-            playlist_genres = [t['genre'] for t in st.session_state.generated_playlist]
-            
-            fig.add_trace(go.Scatter(
-                x=playlist_x,
-                y=playlist_y,
+                x=playlist_df['PC1'],
+                y=playlist_df['PC2'],
                 mode='markers+text',
+                marker=dict(size=12, color='red'),
+                text=playlist_df['position'],
+                textposition='top center',
                 name='Playlist',
-                marker=dict(size=15, color='red', line=dict(width=2, color='black')),
-                text=[str(i+1) for i in range(len(playlist_x))],
-                textposition='middle center',
-                textfont=dict(color='white', size=10, family='Arial Black'),
-                hovertext=playlist_names,
-                hovertemplate='%{hovertext}<br>Genre: ' + '%{customdata}',
-                customdata=playlist_genres
+                hovertext=playlist_df['name']
             ))
             
             fig.update_layout(
-                title='Visualisation de la playlist dans l\'espace PCA',
-                xaxis_title='Composante Principale 1',
-                yaxis_title='Composante Principale 2',
-                height=700,
-                showlegend=True,
-                hovermode='closest'
+                title=_('Visualisation de la Playlist'),
+                height=500,
+                showlegend=True
             )
-            
             st.plotly_chart(fig, use_container_width=True)
             
-            # Liste détaillée
-            st.subheader("🎵 Ordre de lecture")
+            # Liste des tracks
+            st.subheader(_("🎵 Ordre de lecture"))
             
-            for track in st.session_state.generated_playlist:
-                col1, col2, col3 = st.columns([1, 5, 2])
+            spotify_tracks_count = 0
+            deezer_tracks_count = 0
+            
+            for track_info in st.session_state.generated_playlist:
+                col1, col2, col3, col4, col5 = st.columns([1, 3, 1, 1, 1])
                 
                 with col1:
-                    st.markdown(f"**#{track['position']}**")
+                    st.markdown(f"**#{track_info['position']}**")
                 
                 with col2:
-                    st.markdown(f"**{track['name']}**")
-                    st.caption(f"Genre: {track['genre']}")
+                    st.markdown(f"**{track_info['name']}**")
+                    st.caption(f"{track_info['genre']}")
                 
                 with col3:
-                    st.metric("Distance", f"{track['distance']:.3f}")
-            
-            # Métriques de qualité
-            st.subheader("📈 Métriques de qualité")
-            
-            genres_in_playlist = [t['genre'] for t in st.session_state.generated_playlist]
-            unique_genres = len(set(genres_in_playlist))
-            avg_distance = np.mean([t['distance'] for t in st.session_state.generated_playlist])
-            
-            # Calculer la fluidité (distance entre tracks consécutives)
-            smoothness_distances = []
-            for i in range(len(st.session_state.generated_playlist) - 1):
-                p1 = np.array([
-                    st.session_state.generated_playlist[i]['PC1'],
-                    st.session_state.generated_playlist[i]['PC2']
-                ])
-                p2 = np.array([
-                    st.session_state.generated_playlist[i+1]['PC1'],
-                    st.session_state.generated_playlist[i+1]['PC2']
-                ])
-                smoothness_distances.append(np.linalg.norm(p2 - p1))
-            
-            avg_smoothness = np.mean(smoothness_distances) if smoothness_distances else 0
-            
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Tracks", len(st.session_state.generated_playlist))
-            col2.metric("Genres uniques", unique_genres)
-            col3.metric("Distance moy.", f"{avg_distance:.3f}")
-            col4.metric("Fluidité", f"{avg_smoothness:.3f}")
-            
-            # Distribution des genres dans la playlist
-            genre_dist = pd.Series(genres_in_playlist).value_counts()
-            
-            fig_dist = px.bar(
-                x=genre_dist.index,
-                y=genre_dist.values,
-                color=genre_dist.index,
-                color_discrete_map=genre_colors,
-                title='Distribution des genres dans la playlist',
-                labels={'x': 'Genre', 'y': 'Nombre'}
-            )
-            fig_dist.update_layout(showlegend=False, height=300)
-            st.plotly_chart(fig_dist, use_container_width=True)
+                    deezer_tracks_count += 1
+                
+                with col4:
+                    st.markdown(f"📏 {track_info['distance']:.2f}")
+                
+                with col5:
+                    if track_info['position'] == 1:
+                        st.markdown(_("🚀 **Départ**"))
+                    elif track_info['position'] == len(st.session_state.generated_playlist):
+                        st.markdown(_("🎯 **Arrivée**"))
             
             # Export vers Spotify
-            if spotify_client:
-                st.subheader("💾 Exporter la playlist")
-                
+            st.markdown("---")
+            st.subheader(_("📤 Exporter vers Spotify"))
+            
+            st.info(_(f"ℹ️ {spotify_tracks_count} tracks Spotify peuvent être exportées, {deezer_tracks_count} tracks Deezer ne peuvent pas être exportées"))
+            
+            if spotify_tracks_count > 0:
                 col1, col2 = st.columns(2)
-                
                 with col1:
-                    playlist_name = st.text_input("Nom de la playlist:", 
-                                                value=f"Playlist IA - {datetime.now().strftime('%d/%m/%Y')}")
-                    playlist_description = st.text_area("Description:",
-                                                      value="Playlist générée automatiquement par l'IA")
-                
+                    playlist_name = st.text_input(_("Nom de la playlist:"), value="Ma Playlist IA")
                 with col2:
-                    st.write("")
-                    st.write("")
-                    if st.button("📤 Créer sur Spotify", type="primary", use_container_width=True):
-                        # Préparer les données pour l'export
-                        export_tracks = []
-                        for playlist_track in st.session_state.generated_playlist:
-                            # Trouver la track originale dans analyzed_tracks
-                            for original_track in st.session_state.analyzed_tracks:
-                                if original_track.get('name') == playlist_track['name']:
-                                    export_tracks.append(original_track)
-                                    break
+                    playlist_desc = st.text_input(_("Description:"), value="Générée par IA")
+                
+                if st.button(_("🎵 Créer la playlist sur Spotify"), type="primary"):
+                    if spotify_client:
+                        # Récupérer les URIs des tracks Spotify uniquement
+                        playlist_tracks_data = []
+                        for track_info in st.session_state.generated_playlist:
+                            track_idx = track_info['index']
+                            track_uri = st.session_state.pca_df.iloc[track_idx]['uri']
+                            if track_uri:  # Uniquement les tracks Spotify
+                                playlist_tracks_data.append({
+                                    'uri': track_uri,
+                                    'name': track_info['name'],
+                                    'spotify_id': st.session_state.pca_df.iloc[track_idx]['spotify_id']
+                                })
                         
-                        if export_tracks:
-                            playlist = export_playlist_to_spotify(
-                                spotify_client,
-                                export_tracks,
-                                playlist_name,
-                                playlist_description
+                        if playlist_tracks_data:
+                            result = export_playlist_to_spotify(
+                                spotify_client, 
+                                playlist_tracks_data, 
+                                playlist_name, 
+                                playlist_desc
                             )
                         else:
-                            st.warning("⚠️ Aucune track Spotify trouvée pour l'export")
-    
-    else:
-        st.info("👆 Analysez au moins 2 tracks dans l'onglet Analyse pour générer une playlist")
+                            st.warning(_("Aucune track Spotify dans la playlist à exporter"))
+                    else:
+                        st.error(_("❌ Client Spotify non disponible"))
+            else:
+                st.warning(_("Aucune track Spotify dans la playlist sélectionnée pour l'export"))
+
+# Footer
+st.markdown(_(
+    """
+    ---
+    Développé par [Gabriel Marie-Brisson](https://gabriel.mariebrisson.fr)
+    """
+))
