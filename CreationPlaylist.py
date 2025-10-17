@@ -628,13 +628,9 @@ with st.sidebar:
     # Essayer plusieurs chemins possibles
     model_path = "templates/assets/music/best_model_original_loss.pth"
     
-    model_loaded = False
     with st.spinner(_("Chargement...")):
         st.session_state.model = load_model(model_path)
     
-    if not model_loaded:
-        st.error(_("❌ Aucun modèle trouvé"))
-
     # Connexion Spotify
     st.subheader(_("🔗 Connexion Spotify"))
     
